@@ -1,0 +1,56 @@
+{
+  "title": "长三角城市群",
+  "features": [
+    {
+      "id": "hz",
+      "name": "杭州",
+      "city": "杭州",
+      "kind": "point",
+      "lon": 120.1551,
+      "lat": 30.2741,
+      "style": "primary"
+    },
+    {
+      "id": "sz",
+      "name": "苏州",
+      "city": "苏州",
+      "kind": "point",
+      "lon": 120.5853,
+      "lat": 31.2989,
+      "style": "secondary"
+    },
+    {
+      "id": "nj",
+      "name": "南京",
+      "city": "南京",
+      "kind": "point",
+      "lon": 118.7969,
+      "lat": 32.0603,
+      "style": "highlight"
+    },
+    {
+      "id": "hf",
+      "name": "合肥",
+      "city": "合肥",
+      "kind": "point",
+      "lon": 117.2272,
+      "lat": 31.8206,
+      "style": "default"
+    },
+    {
+      "id": "sh",
+      "name": "上海",
+      "city": "上海",
+      "kind": "point",
+      "lon": 121.4737,
+      "lat": 31.2304,
+      "style": "danger"
+    }
+  ],
+  "legend": [
+    { "label": "核心城市", "color": "#38bdf8" },
+    { "label": "区域中心", "color": "#a78bfa" },
+    { "label": "重点关注", "color": "#f87171" }
+  ],
+  "view": { "fit": true }
+}

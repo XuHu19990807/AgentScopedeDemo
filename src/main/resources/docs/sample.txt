@@ -1,0 +1,4 @@
+这是示例知识文档内容。
+本系统支持多种文档格式: TXT, PDF, DOCX, XLSX, XLS, XML。
+通过 KnowledgeBaseService 上传后，内容将写入 RediSearch 索引和向量存储。
+用户可通过知识库API进行全文搜索和语义搜索。

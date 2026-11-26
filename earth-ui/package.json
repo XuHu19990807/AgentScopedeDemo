@@ -1,0 +1,25 @@
+{
+  "name": "earth-ui",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AgentChat 数字地球子应用（Vue 2.7 + Cesium + OpenLayers，完全离线）",
+  "scripts": {
+    "serve": "vue-cli-service serve",
+    "build": "vue-cli-service build",
+    "validate:styles": "node --no-warnings scripts/validate-plot-styles.mjs"
+  },
+  "dependencies": {
+    "core-js": "^3.37.0",
+    "vue": "2.7.16"
+  },
+  "devDependencies": {
+    "@vue/cli-plugin-babel": "5.0.8",
+    "@vue/cli-service": "5.0.8",
+    "vue-template-compiler": "2.7.16"
+  },
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not dead"
+  ]
+}

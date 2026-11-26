@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "defaults": {
+    "point": {
+      "color": "#38bdf8",
+      "radius": 5,
+      "strokeColor": "#0b1220",
+      "strokeWidth": 1.5,
+      "labelColor": "#e2e8f0",
+      "labelBackground": "rgba(15,23,42,.78)",
+      "labelOffsetY": -16
+    },
+    "line": {
+      "color": "#22d3ee",
+      "width": 2.5,
+      "dash": null,
+      "labelColor": "#e2e8f0",
+      "labelBackground": "rgba(15,23,42,.78)"
+    },
+    "polygon": {
+      "color": "#22c55e",
+      "fillAlpha": 0.18,
+      "width": 2,
+      "dash": null,
+      "labelColor": "#e2e8f0",
+      "labelBackground": "rgba(15,23,42,.78)"
+    }
+  },
+  "themes": {
+    "dark": {
+      "labelColor": "#e2e8f0",
+      "labelBackground": "rgba(15,23,42,.78)"
+    },
+    "light": {
+      "labelColor": "#0f172a",
+      "labelBackground": "rgba(255,255,255,.92)"
+    }
+  },
+  "selection": {
+    "color": "#fbbf24",
+    "width": 3
+  },
+  "styles": {
+    "point": {
+      "kind": "point",
+      "label": "标注点"
+    },
+    "city": {
+      "kind": "point",
+      "base": "point",
+      "label": "城市",
+      "color": "#38bdf8",
+      "icon": "city.svg",
+      "iconSize": 26
+    },
+    "city.primary": {
+      "kind": "point",
+      "base": "city",
+      "label": "重点城市",
+      "color": "#f59e0b",
+      "icon": "city-primary.svg",
+      "iconSize": 30
+    },
+    "city.warning": {
+      "kind": "point",
+      "base": "city",
+      "label": "关注城市",
+      "color": "#ef4444",
+      "icon": "alert.svg",
+      "iconSize": 30
+    },
+    "site.base-station": {
+      "kind": "point",
+      "base": "point",
+      "label": "通信基站",
+      "color": "#22c55e",
+      "icon": "base-station.svg",
+      "iconSize": 24
+    },
+    "target.aircraft": {
+      "kind": "point",
+      "base": "point",
+      "label": "飞机",
+      "color": "#f59e0b",
+      "icon": "aircraft.svg",
+      "iconSize": 28
+    },
+    "route": {
+      "kind": "line",
+      "label": "路线"
+    },
+    "route.alert": {
+      "kind": "line",
+      "base": "route",
+      "label": "警示路线",
+      "color": "#ef4444",
+      "dash": [10, 6]
+    },
+    "route.dashed": {
+      "kind": "line",
+      "base": "route",
+      "label": "虚线路线",
+      "color": "#a78bfa",
+      "dash": [6, 6]
+    },
+    "area": {
+      "kind": "polygon",
+      "label": "区域"
+    },
+    "area.alert": {
+      "kind": "polygon",
+      "base": "area",
+      "label": "警示区域",
+      "color": "#ef4444",
+      "fillAlpha": 0.2
+    },
+    "line": {
+      "kind": "line",
+      "label": "线"
+    },
+    "polygon": {
+      "kind": "polygon",
+      "label": "面"
+    }
+  },
+  "aliases": {
+    "default": "point",
+    "primary": "city.primary",
+    "secondary": "city",
+    "highlight": "city.primary",
+    "danger": "area.alert"
+  }
+}

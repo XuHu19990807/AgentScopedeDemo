@@ -1,0 +1,438 @@
+server:
+  port: 8092
+
+spring:
+  application:
+    name: agentchat-v2
+
+  main:
+    allow-bean-definition-overriding: true
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  # ========== Redis 配置（Jedis 与 Spring 共用这一份） ==========
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 4
+
+# ========== AgentScope Java 2.0 配置 ==========
+agentscope:
+  model:
+    openai:
+      api-key: ${AI_API_KEY:}
+      base-url: ${AI_BASE_URL:https://api.deepseek.com}
+      chat-model: ${AI_CHAT_MODEL:deepseek-v4-pro}
+      temperature: 0.7
+      max-tokens: 4096
+      # 备用模型：主模型故障时 HarnessAgent 自动降级（配置了 chat-model 才启用）
+      fallback:
+        api-key: ${AI_FALLBACK_API_KEY:}
+        base-url: ${AI_FALLBACK_BASE_URL:}
+        chat-model: ${AI_FALLBACK_MODEL:}
+        temperature: 0.7
+    # 深度思考模型（mode=deep），未配置时回落到主模型
+    reasoner:
+      api-key: ${AI_REASONER_API_KEY:${AI_API_KEY:}}
+      base-url: ${AI_REASONER_BASE_URL:${AI_BASE_URL:https://api.deepseek.com}}
+      chat-model: ${AI_REASONER_MODEL:deepseek-reasoner}
+      temperature: 0.6
+      max-tokens: 8192
+  workspace:
+    path: .agentscope/workspace
+  # Embedding 模型（OpenAI 兼容，DashScope 通义千问）
+  embedding:
+    # 可为空：内网无鉴权的本地 embedding（Ollama/vLLM/TEI 等）留空即可，此时不发送 Authorization 头
+    api-key: ${EMBEDDING_API_KEY:}
+    base-url: ${EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    model: ${EMBEDDING_MODEL:qwen3.7-text-embedding}
+    # 模型最大上下文长度（tokens），超长输入自动截断
+    max-tokens: ${EMBEDDING_MAX_TOKENS:512}
+
+# ========== 应用配置 ==========
+app:
+  # SSE 流式超时（秒）
+  sse:
+    # 容器侧 SSE 超时；应大于 idle-timeout-seconds，保证看门狗先于容器触发
+    timeout-seconds: 360
+    # 事件空闲上限：超过该时长没有任何事件就强制收尾（覆盖模型/工具/记忆后处理卡死）
+    idle-timeout-seconds: 300
+  # 对话上传文件的保存目录
+  upload:
+    dir: ${UPLOAD_DIR:./uploads}
+  # 数字地球静态 SDK 目录（Cesium/OpenLayers 不入 jar，部署时挂载或复制到该目录）
+  map:
+    assets-dir: ${MAP_ASSETS_DIR:./map-assets}
+  # 标绘图标外部目录（可用本地已有图片，前端通过 /plot-images/xxx.png 引用）
+  plot:
+    images-dir: ${PLOT_IMAGES_DIR:./plot-images}
+  # 管理接口令牌；为空时仅允许本机访问管理接口
+  admin-token: ${ADMIN_TOKEN:}
+  memory:
+    store-preference: true
+    # 是否用廉价模型异步抽取结构化用户画像（Redis），与 MEMORY.md 并存
+    extract-enabled: ${APP_MEMORY_EXTRACT_ENABLED:true}
+  # Redis key 统一前缀，避免与旧工程数据冲突（旧工程用 chat:/agentstate:）
+  state:
+    prefix: ${APP_STATE_PREFIX:agentchat:v2:}
+  context:
+    # 动态上下文（RAG/附件/画像）注入预算，超出截断并标记
+    knowledge-max-chars: ${APP_CONTEXT_KNOWLEDGE_MAX_CHARS:6000}
+    attachment-max-chars: ${APP_CONTEXT_ATTACHMENT_MAX_CHARS:12000}
+    profile-max-chars: ${APP_CONTEXT_PROFILE_MAX_CHARS:1500}
+  # 上传文件能力预检：有 skill/MCP 能处理该文件类型时跳过 embedding 建向量
+  capability:
+    # 主开关：true=命中能力时跳过 embedding，false=全部走 embedding
+    skip-when-capable: ${CAPABILITY_SKIP_WHEN_CAPABLE:true}
+    # 仅认显式映射，避免"工具名里含 pdf"就误判；格式 ".pdf=pdf-parse,.xlsx=excel-report"
+    processor-mapping: ${CAPABILITY_PROCESSOR_MAPPING:}
+
+# ========== RAG（检索增强）配置 ==========
+# 链路：上传 → DocumentTextExtractor（保留标题/表格结构）→ DocumentChunker 父子块
+#       → EmbeddingService 批量向量化 → Milvus 双集合（rag_dense 稠密 + rag_bm25 稀疏/BM25）
+#       → MilvusHybridRetriever（稠密 + BM25 加权 RRF，可选 rerank / 查询扩展）
+#       → 注入对话 / orchestrator 调度 / knowledge Agent 工具
+rag:
+  # 总开关：false 时不做检索、不注入、不暴露检索工具（服务其余功能不受影响）
+  enabled: ${RAG_ENABLED:true}
+  # 检索后端固定为 Milvus；Redis 时代的 KnowledgeIndex/HybridRetriever 仅保留为参考代码，
+  # 不再参与组件装配（需要回退旧行为请整体回退应用版本，而不是切开关）。
+  chunk:
+    # 目标块大小（字符）。360 由 embedding 预算决定：max-tokens 512 - 60 余量 ≈ 452 token，
+    # 中文按 1 token/字符 估算，超出会被 embedding 接口静默截断，导致"后半段检索不到"。
+    target-chars: ${RAG_CHUNK_TARGET_CHARS:360}
+    # 相邻块重叠字符数，保证跨块句子不被切断
+    overlap-chars: ${RAG_CHUNK_OVERLAP_CHARS:48}
+    # 单文件最大块数（防超大文件打爆向量库）
+    max-chunks-per-file: ${RAG_CHUNK_MAX_PER_FILE:5000}
+    # 父块（命中子块后注入模型的小节上下文）最大字符数
+    parent-max-chars: ${RAG_CHUNK_PARENT_MAX_CHARS:1200}
+    # 估算 token 上限：超过先切小再嵌入，不再依赖 EmbeddingService 静默截断
+    max-estimated-tokens: ${RAG_CHUNK_MAX_TOKENS:480}
+    # 小于该字符数的碎片块直接丢弃
+    min-chars: ${RAG_CHUNK_MIN_CHARS:20}
+  embed:
+    # 批量向量化时单次请求的文本条数（OpenAI 兼容接口支持 input 数组）
+    batch-size: ${RAG_EMBED_BATCH_SIZE:16}
+    # 向量维度；0 = 用一次探针请求自动探测（必须与 Milvus 集合 DIM 一致）
+    dimension: ${RAG_EMBED_DIMENSION:0}
+    # 单条 embedding 失败后的重试次数
+    retries: ${RAG_EMBED_RETRIES:2}
+  retrieve:
+    # 最终注入模型的片段数
+    top-k: ${RAG_TOP_K:6}
+    # 单路召回候选数（稠密与 BM25 各取这么多，再融合）
+    candidate-limit: ${RAG_CANDIDATE_LIMIT:40}
+    # RRF 融合常数：score = Σ weight/(k + rank)
+    rrf-k: ${RAG_RRF_K:60}
+    # 稠密路权重（语义为主）
+    dense-weight: ${RAG_DENSE_WEIGHT:1.0}
+    # BM25 路权重（专有名词/编号/表格关键词靠它兜底）
+    bm25-weight: ${RAG_BM25_WEIGHT:0.8}
+    # 同一文档最多贡献几条，避免一个文件霸屏
+    max-per-doc: ${RAG_MAX_PER_DOC:4}
+    # 单次检索总超时（毫秒）：超时降级为已拿到的部分结果
+    timeout-ms: ${RAG_RETRIEVE_TIMEOUT_MS:2500}
+    # 融合分数下限（0 = 不过滤）
+    min-score: ${RAG_MIN_SCORE:0.0}
+    # 向量路余弦相似度下限：低于该值的块视为不相关，不进入候选
+    min-vector-similarity: ${RAG_MIN_VECTOR_SIMILARITY:0.2}
+  inject:
+    # 是否把检索结果自动注入对话上下文
+    enabled: ${RAG_INJECT_ENABLED:true}
+    # 注入块的最大字符预算，超出按相关度截断
+    max-chars: ${RAG_INJECT_MAX_CHARS:6000}
+    # 本轮带附件时跳过自动注入（附件内容就是用户指定的证据，避免两套上下文打架）
+    skip-when-attachments: ${RAG_INJECT_SKIP_WITH_ATTACHMENTS:true}
+  verify:
+    # 逐句验证时，句子与证据的相似度阈值
+    support-threshold: ${RAG_VERIFY_THRESHOLD:0.55}
+    # 单次最多验证的句子数
+    max-sentences: ${RAG_VERIFY_MAX_SENTENCES:40}
+  agentic:
+    # knowledge Agent 是否可用 searchKnowledge/readChunk 工具做多轮主动检索
+    enabled: ${RAG_AGENTIC_ENABLED:true}
+  # 精排：DashScope 兼容 text-rerank，对 RRF 候选重排；接口不可达自动退回 RRF 顺序
+  rerank:
+    enabled: ${RAG_RERANK_ENABLED:false}
+    base-url: ${RAG_RERANK_BASE_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
+    api-key: ${RAG_RERANK_API_KEY:}
+    model: ${RAG_RERANK_MODEL:gte-rerank-v2}
+    # 送去精排的候选条数
+    top-n: ${RAG_RERANK_TOP_N:20}
+    timeout-ms: ${RAG_RERANK_TIMEOUT_MS:1500}
+  # 查询扩展：口语化问题召回不足时，让模型改写查询，只补 BM25 召回
+  query-expansion:
+    enabled: ${RAG_QUERY_EXPANSION_ENABLED:false}
+    # 最高分低于该值时触发改写
+    trigger-score: ${RAG_QUERY_EXPANSION_TRIGGER:0.45}
+    max-queries: ${RAG_QUERY_EXPANSION_MAX:2}
+    timeout-ms: ${RAG_QUERY_EXPANSION_TIMEOUT_MS:1000}
+  # 本地 Milvus（docker compose 默认 19530，无鉴权时 token/username 留空）
+  milvus:
+    uri: ${MILVUS_URI:http://127.0.0.1:19530}
+    database: ${MILVUS_DATABASE:default}
+    token: ${MILVUS_TOKEN:}
+    username: ${MILVUS_USERNAME:}
+    password: ${MILVUS_PASSWORD:}
+    # 集合版本：换 embedding 模型/维度时改这里（旧集合保留可回退）
+    collection-version: ${MILVUS_COLLECTION_VERSION:v1}
+    dense-collection: ${MILVUS_DENSE_COLLECTION:rag_dense}
+    bm25-collection: ${MILVUS_BM25_COLLECTION:rag_bm25}
+    metric: ${MILVUS_METRIC:COSINE}
+    connect-timeout-ms: ${MILVUS_CONNECT_TIMEOUT_MS:5000}
+    # 中文分词器：chinese（jieba）；建 BM25 集合时使用
+    analyzer: ${MILVUS_ANALYZER:chinese}
+    # 启动后即建集合/校验；Milvus 不可用时只告警，不阻塞应用启动
+    ensure-on-startup: ${MILVUS_ENSURE_ON_STARTUP:true}
+  # 原文留存：上传成功后把原始字节写到该目录，供"重新解析"和原文预览使用
+  storage:
+    dir: ${RAG_STORAGE_DIR:data/knowledge}
+  # 知识库工作台的分段编辑限制（全部是同步请求，避免大文档把请求拖死）
+  edit:
+    # 单次编辑/重排/重命名/重解析允许重新向量化的分段上限
+    max-reembed-chunks: ${RAG_EDIT_MAX_REEMBED:500}
+    # 分段分页每页上限
+    max-page-size: ${RAG_EDIT_MAX_PAGE_SIZE:100}
+    # 单个分段内容字符上限（BM25 集合 content 字段 VarChar(8192)）
+    max-chunk-chars: ${RAG_EDIT_MAX_CHUNK_CHARS:8000}
+# ========== 对话配置 ==========
+chat:
+  # SSE 心跳间隔（秒）
+  heartbeat-seconds: 15
+  # 单次加载的历史消息条数
+  history-limit: 50
+  # 自动标题最大字符数
+  title-max-length: 30
+  # 单条用户消息最大字符数
+  max-content-length: 32000
+  # 对话内文件上传与文件问答
+  files:
+    enabled: ${CHAT_FILES_ENABLED:true}
+    max-size-mb: ${CHAT_FILES_MAX_SIZE_MB:20}
+    max-files: ${CHAT_FILES_MAX_FILES:5}
+    max-context-chars: ${CHAT_FILES_MAX_CONTEXT_CHARS:12000}
+    chunk-chars: 1200
+    chunk-overlap: 200
+    max-extract-chars: 2000000
+    max-pdf-pages: 300
+    max-excel-rows: 5000
+    ttl-days: ${CHAT_FILES_TTL_DAYS:7}
+    extract-timeout-seconds: 30
+    cleanup-cron: "0 30 3 * * *"
+    # 对话内容导出为文件（Word/Excel/TXT 等）
+    export-enabled: ${CHAT_FILES_EXPORT_ENABLED:true}
+    export-max-mb: 10
+    export-max-chars: 200000
+    # 模型未调用保存工具、但用户明确要求导出时，自动把答复转成文件
+    export-fallback-enabled: ${CHAT_FILES_EXPORT_FALLBACK:true}
+
+# ========== 本地技能目录 ==========
+skill:
+  # 目录下每个子目录放一个 SKILL.md
+  local-dir: ${SKILL_LOCAL_DIR:skills}
+
+# ========== Redis Stack 模块配置 ==========
+# 知识库检索已迁到 Milvus（见 rag.milvus），这里只保留记忆索引前缀；
+# doc:knowledge: 仍作为 chunkId 前缀使用，但不再对应 RediSearch 索引。
+redis-stack:
+  search:
+    index-prefix:
+      memory: "doc:memory:"
+
+# ========== Nacos 配置（Agent 提示词 + Skill 技能 + MCP 服务发现） ==========
+# 运行时 AI 资源统一走官方 nacos-client 3.3.0 SDK（Prompt/Skill/MCP）；
+# 仅资源枚举使用 3.3 的 Client API（/v3/client/**），不再依赖控制台 API。
+nacos:
+  # 总开关：默认开启；不可用时靠 Gate 熔断并回落到本地能力
+  enabled: ${NACOS_ENABLED:true}
+  # 分特性开关
+  prompt:
+    enabled: ${NACOS_PROMPT_ENABLED:true}
+    # 兼容旧版 ConfigService（dataId={agentId}.json）：默认关闭，Prompt 以 Registry 为唯一来源
+    legacy-config-fallback: ${NACOS_PROMPT_LEGACY_CONFIG:false}
+  skill:
+    enabled: ${NACOS_SKILL_ENABLED:true}
+    # client（默认，Client API 搜索 + SDK 下载）| console（旧控制台行为，可看草稿）
+    discovery: ${NACOS_SKILL_DISCOVERY:client}
+    # 技能列表增量刷新间隔（毫秒）；关闭刷新请设 skill.enabled=false
+    refresh-interval-ms: ${NACOS_SKILL_REFRESH_INTERVAL:30000}
+  mcp:
+    enabled: ${NACOS_MCP_ENABLED:true}
+    # auto（Registry 优先、naming 兜底）| registry | naming
+    discovery-mode: ${NACOS_MCP_DISCOVERY_MODE:auto}
+    # Registry 模式下的 MCP 资源名（逗号分隔）；为空时通过 Client API 搜索全部
+    registry-names: ${NACOS_MCP_NAMES:}
+    # SSE 端点缺省路径（registry 端点未提供 path 时使用）
+    sse-path: ${NACOS_MCP_SSE_PATH:/mcp/sse}
+  server-addr: ${NACOS_SERVER:127.0.0.1:8848}
+  namespace: ${NACOS_NAMESPACE:public}
+  username: ${NACOS_USERNAME:nacos}
+  password: ${NACOS_PASSWORD:nacos}
+  # 控制台地址：仅 skill.discovery=console 兼容模式使用
+  skill-server-addr: ${NACOS_SKILL_SERVER:127.0.0.1:8080}
+  # 控制台 API 基地址；留空时推导为 http://{skill-server-addr}
+  skill-console-base-url: ${NACOS_SKILL_CONSOLE_BASE_URL:}
+  # 客户端 API 基地址；留空时推导为 http://{server-addr}/nacos
+  skill-client-base-url: ${NACOS_SKILL_CLIENT_BASE_URL:}
+  skill-namespace: ${NACOS_SKILL_NAMESPACE:public}
+  # 旧版 prompt 存储的 group（dataId = {agentId}.json），仅 legacy 开关开启时使用
+  prompt-group: ${NACOS_PROMPT_GROUP:nacos-ai-prompt}
+  # 单次 Nacos 调用的超时（官方 getConfig 示例推荐 3000ms）
+  timeout-ms: ${NACOS_TIMEOUT_MS:3000}
+  # 熔断：按特性（prompt/skill/mcp）独立计数，连续失败 N 次后仅暂停该特性
+  circuit-breaker:
+    failure-threshold: 3
+    cooldown-seconds: 300
+  # MCP naming 模式：监听的服务名（未设置时自动扫描所有含 "mcp" 的服务）
+  service-name: ${NACOS_SERVICE_NAME:mcp-server}
+  # MCP naming 发现白名单（逗号分隔；为空表示不启用自动发现）
+  discover-services: ${NACOS_DISCOVER_SERVICES:}
+  # MCP 实例扫描间隔（毫秒）
+  scan-interval-ms: ${NACOS_SCAN_INTERVAL:30000}
+
+# ========== MCP 服务管理 ==========
+mcp:
+  stream:
+    tracked-tools: "*"
+  # 单次连接/调用/健康检查的参数
+  connect-timeout-ms: 10000
+  call-timeout-ms: 60000
+  health-check-interval-ms: 30000     # 健康巡检周期：发现断连并触发自动重连
+  health-timeout-ms: 5000             # 单次 ping 探测超时
+  reconnect-initial-delay-ms: 10000   # 重连退避初始间隔（指数翻倍，带抖动）
+  reconnect-max-delay-ms: 300000      # 重连退避上限
+  auto-reconnect-enabled: true        # 关闭后仅保留健康探测与手动"重连"按钮
+  persist-file: ./data/mcp-servers.json  # 页面添加的 MCP 定义持久化（重启后自动恢复）
+  # 传给 UI 的工具结果预览上限（字节）
+  result-preview-bytes: 8192
+  # 允许通过 UI 启动的 stdio 命令（安全白名单）
+  stdio:
+    allowed-commands: ${MCP_ALLOWED_COMMANDS:npx,node,uvx,python,python3}
+  # 启动时连接的 MCP Server（页面增删的会持久化到 persist-file，同名以文件为准）。示例：
+  # servers:
+  #   - name: everything
+  #     transport: stdio              # stdio | sse
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-everything"]
+  #     enabled: true
+  #   - name: remote
+  #     transport: sse
+  #     url: http://localhost:8081/mcp/sse
+  servers: []
+
+# ========== Agent系统配置 ==========
+agent:
+  system:
+    agents:
+      chat:
+        name: "对话Agent"
+        description: "默认聊天助手，支持工具、MCP 与技能"
+        enabled: true
+        temperature: 0.7
+        skill-names: "*"
+        mcp-servers: "*"
+      deep:
+        name: "深度思考Agent"
+        description: "深度思考模式，使用推理模型"
+        enabled: true
+        temperature: 0.6
+        skill-names: "*"
+        mcp-servers: "*"
+      orchestrator:
+        name: "统筹Agent"
+        description: "中央调度，任务分解与分配"
+        enabled: true
+        temperature: 0.3
+        skill-names: ""
+      knowledge:
+        name: "知识Agent"
+        description: "知识检索与增强生成 (RAG)"
+        enabled: true
+        temperature: 0.5
+        skill-names: ""
+      tool:
+        name: "工具Agent"
+        description: "外部工具与API调用"
+        enabled: true
+        temperature: 0.2
+        skill-names: ""
+      basic-info:
+        name: "信息查询Agent"
+        description: "通过MCP服务查询天气预报、新闻资讯、实时数据等基本信息"
+        enabled: true
+        temperature: 0.3
+        skill-names: ""
+      network-planning:
+        name: "信息规划Agent"
+        description: "链路信息规划，按工作流分步处理"
+        enabled: true
+        temperature: 0.4
+        skill-names: ""
+      workflow:
+        name: "工作流Agent"
+        description: "执行多步骤工作流，每节点独立流式输出"
+        enabled: true
+        temperature: 0.3
+        skill-names: ""
+      file:
+        name: "文件分析Agent"
+        description: "分析上传文件，结合知识库RAG与技能处理，调用MCP解决文件相关问题"
+        enabled: true
+        temperature: 0.3
+        skill-names: "*"
+  # ========== 多 Agent 编排（orchestrate 模式） ==========
+  orchestration:
+    # 并行执行时最多同时调度多少个 Agent（超出部分不再调度，仅告警）
+    parallel-max-agents: ${AGENT_ORCHESTRATION_MAX_AGENTS:6}
+    # 单个 worker 的超时时间（秒），超时按失败计入汇总
+    parallel-worker-timeout-seconds: ${AGENT_ORCHESTRATION_WORKER_TIMEOUT:300}
+    # 是否启用"并行 + 汇总"（关闭后并行请求直接拼接各 Agent 输出）
+    summary-enabled: ${AGENT_ORCHESTRATION_SUMMARY:true}
+    # 汇总输入：单个 Agent 结论上限 / 全部结论总上限（字符）
+    summary-per-agent-max-chars: 6000
+    summary-total-max-chars: 18000
+    summary-temperature: 0.3
+  # ========== Harness 工程化配置（官方 2.0 架构对齐） ==========
+  permission:
+    # 权限模式: BYPASS=全部放行(默认,兼容现状) | DONT_ASK=不弹确认 | DEFAULT=需人工审批(HITL,需前端配合)
+    mode: ${AGENT_PERMISSION_MODE:BYPASS}
+    # 拒绝规则（PermissionEngine 任意 mode 下优先执行），逗号分隔工具名
+    deny-tools: ${AGENT_PERMISSION_DENY_TOOLS:}
+    # 显式放行规则，逗号分隔工具名
+    allow-tools: ${AGENT_PERMISSION_ALLOW_TOOLS:}
+  harness:
+    # Workspace 是官方记忆/技能/会话日志的落盘位置，按 userId + agentId 自动分区
+    workspace-enabled: ${AGENT_HARNESS_WORKSPACE:true}
+    # 官方两层记忆：memory/YYYY-MM-DD.md（flush）+ MEMORY.md（consolidation）
+    memory-enabled: ${AGENT_HARNESS_MEMORY:true}
+    # 仅 orchestrator 启用计划模式（plan_enter/plan_write/plan_exit）
+    plan-mode-enabled: ${AGENT_HARNESS_PLAN_MODE:true}
+    # 单个 ReAct 循环的最大迭代次数
+    max-iters: ${AGENT_HARNESS_MAX_ITERS:12}
+
+# ========== 日志 ==========
+logging:
+  level:
+    com.cetc28: INFO
+    io.agentscope: WARN
+    org.springframework: INFO
+    com.alibaba.nacos: WARN
+
+# ========== 模型动态配置 ==========
+# 管理控制台里保存的语言模型 / Embedding 配置优先落 Redis（model:config:v1），
+# Redis 不可用时回退到这里的本地 JSON 文件；首次启动会用上面的 yml 播种一条默认配置。
+agentchat:
+  model:
+    config-file: data/model-config.json
