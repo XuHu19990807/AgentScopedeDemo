@@ -173,7 +173,8 @@ public class KnowledgeEditService {
             updated.set(index, target.withContent(value));
             List<LogicalChunk> repacked = repackParents(updated);
 
-            StoredChunk stored = toStored(docId, filename, repacked.get(index));
+            StoredChunk stored = toStored(docId, filename, repacked.get(index),
+                    knowledgeBaseService.domainOf(filename));
             float[] vector = embedSingle(stored.embeddingText());
             store.deleteDenseChunks(List.of(chunkId));
             bm25Store.deleteByIds(List.of(chunkId));
@@ -202,7 +203,8 @@ public class KnowledgeEditService {
                 updated.set(index, new LogicalChunk(target.index(), chunkId, tomb.content(), target.parentText(),
                         tomb.headingPath(), tomb.lineStart(), tomb.lineEnd(), true));
                 List<LogicalChunk> repacked = repackParents(updated);
-                StoredChunk stored = toStored(docId, filename, repacked.get(index));
+                StoredChunk stored = toStored(docId, filename, repacked.get(index),
+                        knowledgeBaseService.domainOf(filename));
                 float[] vector = embedSingle(stored.embeddingText());
                 store.addDense(List.of(stored), List.of(vector));
                 bm25Store.insert(List.of(stored));
@@ -318,7 +320,8 @@ public class KnowledgeEditService {
                 if (text == null || text.isBlank()) throw new IllegalStateException("重新解析没有得到文本内容");
                 List<DocumentChunker.ParentChunk> parents = chunker.chunkWithParents(text,
                         props.getChunk().getTargetChars(), props.getChunk().getOverlapChars(),
-                        props.getChunk().getMaxChunksPerFile(), props.getChunk().getParentMaxChars());
+                        props.getChunk().getMaxChunksPerFile(), props.getChunk().getParentMaxChars(),
+                        props.getChunk().getMaxChars());
                 List<LogicalChunk> chunks = new ArrayList<>();
                 int index = 0;
                 for (DocumentChunker.ParentChunk parent : parents) {
@@ -384,9 +387,10 @@ public class KnowledgeEditService {
         ensureCap(enabled);
         List<StoredChunk> stored = new ArrayList<>(enabled);
         List<String> texts = new ArrayList<>(enabled);
+        String domain = knowledgeBaseService.domainOf(filename);
         for (LogicalChunk chunk : repacked) {
             if (!chunk.enabled()) continue;
-            StoredChunk sc = toStored(newDocId, filename, chunk);
+            StoredChunk sc = toStored(newDocId, filename, chunk, domain);
             stored.add(sc);
             texts.add(sc.embeddingText());
         }
@@ -404,11 +408,12 @@ public class KnowledgeEditService {
         Map<String, String> previous = new LinkedHashMap<>();
         for (LogicalChunk chunk : before) previous.put(chunk.chunkId(), chunk.parentText());
         List<StoredChunk> changed = new ArrayList<>();
+        String domain = knowledgeBaseService.domainOf(filename);
         for (LogicalChunk chunk : after) {
             if (!chunk.enabled()) continue;
             String old = previous.get(chunk.chunkId());
             if (old != null && !old.equals(chunk.parentText())) {
-                changed.add(toStored(docId, filename, chunk));
+                changed.add(toStored(docId, filename, chunk, domain));
             }
         }
         if (!changed.isEmpty()) bm25Store.replace(changed);
@@ -445,10 +450,11 @@ public class KnowledgeEditService {
         return result;
     }
 
-    private StoredChunk toStored(String docId, String filename, LogicalChunk chunk) {
+    private StoredChunk toStored(String docId, String filename, LogicalChunk chunk, String domain) {
         return new StoredChunk(chunk.chunkId(), docId, chunk.index(), chunk.content(), chunk.parentText(),
                 filename, chunk.headingPath(), chunk.lineStart(), chunk.lineEnd(),
-                DocumentChunker.sha256(chunk.content() == null ? "" : chunk.content()));
+                DocumentChunker.sha256(chunk.content() == null ? "" : chunk.content()),
+                domain);
     }
 
     private List<float[]> embedAll(List<String> texts) {

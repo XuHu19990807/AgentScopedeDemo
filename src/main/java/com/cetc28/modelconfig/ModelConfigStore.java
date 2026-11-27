@@ -80,8 +80,37 @@ public class ModelConfigStore {
             persist(loaded);
         }
         current = loaded;
+        adoptNewerCollectionVersion();
         log.info("模型配置已加载：version={}, chatProfiles={}, defaultChat={}",
                 loaded.version(), loaded.chatProfiles().size(), loaded.defaultChatId());
+    }
+
+    /**
+     * yml 里的 collection-version 若比已存配置更新（例如升级到 v3 的 HNSW 集合），自动采纳。
+     *
+     * <p>只升不降：管理端通过"应用 Embedding + 重建"抬高的版本不会被旧 yml 覆盖。
+     */
+    private synchronized void adoptNewerCollectionVersion() {
+        String ymlVersion = seedCollectionVersion == null ? "" : seedCollectionVersion.trim();
+        String storedVersion = current.collectionVersion();
+        if (ymlVersion.isBlank() || ymlVersion.equals(storedVersion)) return;
+        if (versionOf(ymlVersion) <= versionOf(storedVersion)) return;
+        ModelConfig next = current.withCollectionVersion(ymlVersion)
+                .withVersion(current.version() + 1, System.currentTimeMillis());
+        persist(next);
+        current = next;
+        log.info("采纳 yml 的新集合版本：{}（原 {}），需重建索引后生效", ymlVersion, storedVersion);
+    }
+
+    private static int versionOf(String value) {
+        if (value == null) return 0;
+        String digits = value.replaceAll("[^0-9]", "");
+        if (digits.isEmpty()) return 0;
+        try {
+            return Integer.parseInt(digits);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     public ModelConfig current() {

@@ -145,4 +145,71 @@ class DocumentTextExtractorTest {
         assertFalse(extractor.supports(".exe"));
         assertEquals(".PDF", DocumentTextExtractor.extensionOf("A.PDF").toUpperCase());
     }
+
+    // ========== 新增契约：段落分隔、单元格截断、Tika 兜底 ==========
+
+    @Test
+    void docxParagraphsAreSeparatedByBlankLines() throws Exception {
+        Path file = temp.resolve("paras.docx");
+        try (XWPFDocument document = new XWPFDocument()) {
+            document.createParagraph().createRun().setText("第一段内容。");
+            document.createParagraph().createRun().setText("第二段内容。");
+            try (OutputStream out = Files.newOutputStream(file)) {
+                document.write(out);
+            }
+        }
+        String text = extractor.extract(file, ".docx");
+        assertTrue(text.contains("第一段内容。"), text);
+        assertTrue(text.contains("第一段内容。\n\n第二段内容。"),
+                "docx 相邻段落之间必须保留空行，实际: " + text.replace("\n", "\\n"));
+    }
+
+    @Test
+    void truncatesOverlongExcelCell() throws Exception {
+        Path file = temp.resolve("long-cell.xlsx");
+        String cell = "x".repeat(3000);
+        try (XSSFWorkbook workbook = new XSSFWorkbook()) {
+            Sheet sheet = workbook.createSheet("长单元格");
+            Row row = sheet.createRow(0);
+            row.createCell(0).setCellValue(cell);
+            try (OutputStream out = Files.newOutputStream(file)) {
+                workbook.write(out);
+            }
+        }
+        String text = extractor.extract(file, ".xlsx");
+        assertTrue(text.contains("…"), "超长单元格应带省略号");
+        for (String line : text.split("\n")) {
+            assertTrue(line.length() <= 1100, "单元格未被截断，行长度 " + line.length());
+        }
+    }
+
+    @Test
+    void extractsRtfThroughTika() throws Exception {
+        Path file = temp.resolve("note.rtf");
+        Files.writeString(file, rtf("Hello RTF from Tika."), StandardCharsets.US_ASCII);
+        String text = extractor.extract(file, ".rtf");
+        assertTrue(text.contains("Hello RTF from Tika"), "Tika 应能解析 .rtf，实际: " + text);
+    }
+
+    @Test
+    void corruptedDocxFallsBackToTikaText() throws Exception {
+        Path file = temp.resolve("broken.docx");
+        Files.writeString(file, rtf("Fallback content works."), StandardCharsets.US_ASCII);
+        String text = extractor.extract(file, ".docx");
+        assertTrue(text.contains("Fallback content works"),
+                "损坏的 docx 应回退到 Tika 文本，实际: " + text);
+    }
+
+    @Test
+    void supportsTikaFallbackExtensions() {
+        assertTrue(extractor.supports(".rtf"));
+        assertTrue(extractor.supports(".odt"));
+        assertTrue(extractor.supports(".ods"));
+        assertTrue(extractor.supports(".wps"));
+        assertTrue(extractor.unsupportedMessage().contains("rtf"));
+    }
+
+    private static String rtf(String body) {
+        return "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Calibri;}}\\f0\\fs22 " + body + "\\par}";
+    }
 }

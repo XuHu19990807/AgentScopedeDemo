@@ -251,6 +251,8 @@
                 <configuration>
                     <!-- 默认跳过需要外部 Nacos/Redis 的集成测试；用 -Dgroups=integration 单独运行 -->
                     <excludedGroups>integration</excludedGroups>
+                    <!-- Milvus BM25 中文检索依赖 JVM 默认字符集，测试 JVM 必须与生产一致使用 UTF-8 -->
+                    <argLine>-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8</argLine>
                 </configuration>
             </plugin>
         </plugins>

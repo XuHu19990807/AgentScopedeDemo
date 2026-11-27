@@ -13,6 +13,7 @@ package com.cetc28.rag;
  * @param lineStart 起始行号（1 基）
  * @param lineEnd   结束行号
  * @param score     检索分数（未检索时为 0）
+ * @param domain    业务域（检索隔离用；空视为 default）
  */
 public record ChunkView(
         String chunkId,
@@ -24,7 +25,22 @@ public record ChunkView(
         String headingPath,
         int lineStart,
         int lineEnd,
-        double score) {
+        double score,
+        String domain) {
+
+    public static final String DEFAULT_DOMAIN = "default";
+
+    /** 兼容旧构造：域缺省为 default。 */
+    public ChunkView(String chunkId, String docId, int chunkIndex, String content, String parentText,
+                     String filename, String headingPath, int lineStart, int lineEnd, double score) {
+        this(chunkId, docId, chunkIndex, content, parentText, filename, headingPath, lineStart, lineEnd,
+                score, DEFAULT_DOMAIN);
+    }
+
+    /** 生效域：空值归一为 default。 */
+    public String effectiveDomain() {
+        return domain == null || domain.isBlank() ? DEFAULT_DOMAIN : domain;
+    }
 
     /** 注入/重排时使用的正文：有父块用父块，否则用块本身。 */
     public String text() {

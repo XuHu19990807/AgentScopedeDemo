@@ -16,10 +16,7 @@ body.json
 /.acl-recovery/
 
 ### IntelliJ IDEA ###
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
+.idea/
 *.iws
 *.iml
 *.ipr
@@ -49,11 +46,9 @@ build/
 ### Mac OS ###
 .DS_Store
 
-### 数字地球外部资源（体积大，按 README 单独放置） ###
-/map-assets/
-
-### 本地备份/构建产物 ###
+### 本地备份与前端构建产物 ###
 _backup_*/
-/earth-ui/node_modules/
-/.idea/
-*.log
+earth-ui/node_modules/
+earth-ui/dist/
+.idea/workspace.xml
+.idea/shelf/

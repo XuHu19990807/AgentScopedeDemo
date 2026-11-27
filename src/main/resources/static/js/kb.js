@@ -10,6 +10,7 @@ const ACCEPT = '.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,.tsv,.txt,.md,.markdo
 const state = {
   files: [],
   filter: '',
+  domain: '',
   selected: null,
   page: 1,
   pageSize: 20,
@@ -33,11 +34,16 @@ export async function renderKnowledgeWorkbench(body) {
           <button class="btn primary btn-sm" id="kbUploadBtn" type="button">＋ 上传</button>
           <input type="file" id="kbFileInput" multiple hidden accept="${ACCEPT}">
         </div>
+        <div class="kb-upload-domain">
+          <input class="cs-input" id="kbUploadDomain" placeholder="上传到域（可选，默认 default）" autocomplete="off">
+        </div>
         <div class="kb-drop" id="kbDrop">拖拽文件到这里上传<br><span class="cs-hint">PDF / Word / Excel / PPT / CSV / HTML / JSON / 文本</span></div>
         <div class="kb-uploads" id="kbUploads"></div>
         <div class="kb-doc-list-head">
           <span>文档 <b id="kbDocCount">0</b></span>
-          <span>拖拽左侧手柄可排序</span>
+          <select class="cs-select kb-domain-filter" id="kbDomainFilter" title="按域筛选">
+            <option value="">全部域</option>
+          </select>
         </div>
         <div class="kb-doc-list" id="kbDocList"><div class="cs-loading">加载中…</div></div>
       </section>
@@ -53,6 +59,10 @@ export async function renderKnowledgeWorkbench(body) {
 function bindSidebar() {
   root.querySelector('#kbDocSearch').addEventListener('input', (event) => {
     state.filter = event.target.value.trim().toLowerCase();
+    renderDocList();
+  });
+  root.querySelector('#kbDomainFilter').addEventListener('change', (event) => {
+    state.domain = event.target.value;
     renderDocList();
   });
   const input = root.querySelector('#kbFileInput');
@@ -104,7 +114,19 @@ async function loadFiles(keepSelection = true) {
 function renderDocList() {
   const list = root.querySelector('#kbDocList');
   const keyword = state.filter;
-  const visible = state.files.filter((file) => !keyword || file.filename.toLowerCase().includes(keyword));
+  const domains = [...new Set(state.files.map((file) => file.domain || 'default'))].sort();
+  const select = root.querySelector('#kbDomainFilter');
+  if (select) {
+    const current = state.domain;
+    select.innerHTML = `<option value="">全部域</option>` +
+      domains.map((domain) => `<option value="${escapeHtml(domain)}">${escapeHtml(domain)}</option>`).join('');
+    select.value = domains.includes(current) ? current : '';
+    if (select.value !== current) state.domain = select.value;
+  }
+  const visible = state.files.filter((file) => {
+    if (state.domain && (file.domain || 'default') !== state.domain) return false;
+    return !keyword || file.filename.toLowerCase().includes(keyword);
+  });
   root.querySelector('#kbDocCount').textContent = `${state.files.length}`;
   if (!visible.length) {
     list.innerHTML = `<div class="cs-empty">${state.files.length ? '没有匹配的文档' : '暂无文档'}</div>`;
@@ -115,7 +137,7 @@ function renderDocList() {
       <span class="kb-doc-handle" title="拖拽排序">⋮⋮</span>
       <div class="kb-doc-main">
         <div class="kb-doc-name" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</div>
-        <div class="kb-doc-meta">${file.chunkCount || 0} 段${file.disabledCount ? ` · 停用 ${file.disabledCount}` : ''} · ${Math.round((file.fileSize || 0) / 1024)} KB</div>
+        <div class="kb-doc-meta"><span class="kb-chip">${escapeHtml(file.domain || 'default')}</span>${file.chunkCount || 0} 段${file.disabledCount ? ` · 停用 ${file.disabledCount}` : ''} · ${Math.round((file.fileSize || 0) / 1024)} KB</div>
       </div>
     </div>`).join('');
 
@@ -174,6 +196,8 @@ async function persistFileOrder(order) {
 
 async function handleUploads(files) {
   const container = root.querySelector('#kbUploads');
+  const domainInput = root.querySelector('#kbUploadDomain');
+  const domain = (domainInput?.value || '').trim();
   for (const file of files) {
     const item = document.createElement('div');
     item.className = 'kb-upload-item';
@@ -185,6 +209,7 @@ async function handleUploads(files) {
     const bar = item.querySelector('.kb-bar > i');
     const form = new FormData();
     form.append('file', file);
+    if (domain) form.append('domain', domain);
     status.textContent = '上传中…';
     try {
       const data = await upload('/api/knowledge/upload', form, (ratio) => {
@@ -275,6 +300,7 @@ async function renderDocMain() {
       <div class="cs-card-head"><h2>检索测试</h2><span class="cs-sub">BM25 + 向量 RRF（hybrid）</span></div>
       <div class="cs-inline">
         <input class="cs-input" id="kbSearchQuery" placeholder="输入问题，验证召回效果…" style="flex:1;min-width:200px">
+        <input class="cs-input" id="kbSearchDomain" placeholder="域（可选）" style="max-width:140px">
         <select class="cs-select" id="kbSearchMode">
           <option value="hybrid">混合</option>
           <option value="bm25">BM25</option>
@@ -496,10 +522,12 @@ function bindSearch() {
     if (!query) return toast('请输入检索内容', 'error');
     const mode = main.querySelector('#kbSearchMode').value;
     const topK = main.querySelector('#kbSearchTopK').value;
+    const domain = (main.querySelector('#kbSearchDomain')?.value || '').trim();
     const hits = main.querySelector('#kbSearchHits');
     hits.innerHTML = '<div class="cs-loading">检索中…</div>';
     try {
-      const data = await get(`/api/knowledge/search?q=${encodeURIComponent(query)}&mode=${mode}&topK=${topK}`);
+      const domainParam = domain ? `&domain=${encodeURIComponent(domain)}` : '';
+      const data = await get(`/api/knowledge/search?q=${encodeURIComponent(query)}&mode=${mode}&topK=${topK}${domainParam}`);
       const degraded = data.degraded ? `<div class="cs-hint">降级：${escapeHtml(data.degradedReason || '部分通路不可用')}</div>` : '';
       hits.innerHTML = degraded + ((data.hits || []).map((hit) => `
         <div class="kb-hit">

@@ -1,0 +1,24 @@
+{
+  "project": "华南数据中心互联",
+  "nodeCount": 4,
+  "mtu": 1500,
+  "bgpAsn": "64513",
+  "nodes": [
+    {
+      "name": "广州-POP-1",
+      "role": "core"
+    },
+    {
+      "name": "广州-POP-2",
+      "role": "edge"
+    },
+    {
+      "name": "广州-POP-3",
+      "role": "edge"
+    },
+    {
+      "name": "广州-POP-4",
+      "role": "edge"
+    }
+  ]
+}

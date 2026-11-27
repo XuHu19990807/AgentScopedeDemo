@@ -42,10 +42,17 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+
+import io.agentscope.core.rag.model.Document;
+import io.agentscope.core.rag.reader.ReaderInput;
+import io.agentscope.core.rag.reader.SplitStrategy;
+import io.agentscope.core.rag.reader.TikaReader;
+import org.apache.tika.sax.BodyContentHandler;
 
 /**
  * 统一文档文本提取器。
@@ -57,6 +64,8 @@ import java.util.Set;
 @Component
 public class DocumentTextExtractor {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DocumentTextExtractor.class);
+
     /** 纯文本类（含代码/配置/Markdown/CSV/JSON 等），按文本读取。 */
     private static final Set<String> TEXT_EXTENSIONS = new LinkedHashSet<>(List.of(
             ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".log",
@@ -67,11 +76,21 @@ public class DocumentTextExtractor {
     private static final Set<String> OFFICE_EXTENSIONS = new LinkedHashSet<>(List.of(
             ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"));
 
+    /**
+     * 复用 AgentScope TikaReader 兜底的格式（暂未单独实现解析器的办公/邮件格式）。
+     *
+     * <p>Tika 3.3.0 随 rag-simple 传递进 classpath，这里只取纯文本，不保留结构；
+     * docx/xlsx/pptx/pdf 等仍走本地调优解析器（保留标题与表格结构）。
+     */
+    private static final Set<String> TIKA_EXTENSIONS = new LinkedHashSet<>(List.of(
+            ".rtf", ".odt", ".ods", ".odp", ".epub", ".eml", ".msg", ".wps", ".et", ".dps"));
+
     private static final Set<String> ALL_EXTENSIONS;
 
     static {
         LinkedHashSet<String> all = new LinkedHashSet<>(TEXT_EXTENSIONS);
         all.addAll(OFFICE_EXTENSIONS);
+        all.addAll(TIKA_EXTENSIONS);
         ALL_EXTENSIONS = Set.copyOf(all);
     }
 
@@ -83,6 +102,14 @@ public class DocumentTextExtractor {
 
     @Value("${chat.files.max-excel-rows:5000}")
     private int maxExcelRows = 5000;
+
+    /** 单个单元格（Excel/Word 表格）最长字符数，防止一格撑爆 Markdown 行 */
+    @Value("${chat.files.max-excel-cell-chars:1000}")
+    private int maxCellChars = 1000;
+
+    /** 现有解析器失败时是否回退 TikaReader 取纯文本 */
+    @Value("${chat.files.tika-fallback:true}")
+    private boolean tikaFallback = true;
 
     /** 取小写扩展名（含点）；无扩展名返回空串。 */
     public static String extensionOf(String filename) {
@@ -103,24 +130,37 @@ public class DocumentTextExtractor {
     public String unsupportedMessage() {
         return "暂不支持该文件格式。支持：.pdf .docx .doc .xlsx .xls .pptx .ppt .txt .md .markdown "
                 + ".csv .tsv .json .jsonl .log .yaml .yml .xml .html .htm .sql .properties .ini .conf "
-                + ".sh .bat .ps1 .java .py .js .ts .css。";
+                + ".sh .bat .ps1 .java .py .js .ts .css .rtf .odt .ods .odp .epub .eml .msg .wps .et .dps。";
     }
 
     /**
      * 从磁盘文件提取文本。
+     *
+     * <p>已知格式走专用解析器；解析失败且开启 tika-fallback 时，用 AgentScope 的
+     * {@link TikaReader} 取纯文本兜底（至少保证可检索）。
      */
     public String extract(Path path, String ext) throws Exception {
         String lower = ext == null ? "" : ext.toLowerCase();
         if (!supports(lower)) {
             throw new UnsupportedOperationException(unsupportedMessage());
         }
+        if (TIKA_EXTENSIONS.contains(lower)) {
+            return tikaOrThrow(path, lower);
+        }
+        try {
+            return extractLocal(path, lower);
+        } catch (Exception e) {
+            return fallbackTika(path, lower, e);
+        }
+    }
+
+    private String extractLocal(Path path, String lower) throws Exception {
         if (".pdf".equals(lower)) {
             try (PDDocument document = Loader.loadPDF(path.toFile())) {
                 return extractPdf(document);
             }
         }
-        byte[] bytes = Files.readAllBytes(path);
-        return extractBytes(bytes, lower);
+        return extractBytes(Files.readAllBytes(path), lower);
     }
 
     /**
@@ -132,12 +172,87 @@ public class DocumentTextExtractor {
             throw new UnsupportedOperationException(unsupportedMessage());
         }
         byte[] bytes = file.getBytes();
-        if (".pdf".equals(lower)) {
-            try (PDDocument document = Loader.loadPDF(bytes)) {
-                return extractPdf(document);
+        if (TIKA_EXTENSIONS.contains(lower)) {
+            return tikaWithTempFile(bytes, lower);
+        }
+        try {
+            if (".pdf".equals(lower)) {
+                try (PDDocument document = Loader.loadPDF(bytes)) {
+                    return extractPdf(document);
+                }
+            }
+            return extractBytes(bytes, lower);
+        } catch (Exception e) {
+            return fallbackTikaWithBytes(bytes, lower, e);
+        }
+    }
+
+    // ========== Tika 兜底（复用 AgentScope TikaReader） ==========
+
+    private String tikaOrThrow(Path path, String ext) throws Exception {
+        String text = tikaText(path);
+        if (text == null || text.isBlank()) {
+            throw new IllegalStateException("Tika 无法解析该 " + ext + " 文件");
+        }
+        return text;
+    }
+
+    private String fallbackTika(Path path, String ext, Exception cause) throws Exception {
+        if (!tikaFallback) throw cause;
+        log.warn("专用解析器解析 {} 失败，回退 TikaReader：{}", ext, cause.getMessage());
+        String text = tikaText(path);
+        if (text == null || text.isBlank()) throw cause;
+        return text;
+    }
+
+    private String fallbackTikaWithBytes(byte[] bytes, String ext, Exception cause) throws Exception {
+        if (!tikaFallback) throw cause;
+        log.warn("专用解析器解析 {} 失败，回退 TikaReader：{}", ext, cause.getMessage());
+        String text = tikaWithTempFile(bytes, ext);
+        if (text == null || text.isBlank()) throw cause;
+        return text;
+    }
+
+    private String tikaWithTempFile(byte[] bytes, String ext) throws Exception {
+        Path temp = Files.createTempFile("extract-", ext.isEmpty() ? ".bin" : ext);
+        try {
+            Files.write(temp, bytes);
+            return tikaText(temp);
+        } finally {
+            try {
+                Files.deleteIfExists(temp);
+            } catch (Exception ignored) {
+                // 临时文件清理失败不影响解析结果
             }
         }
-        return extractBytes(bytes, lower);
+    }
+
+    /**
+     * 用框架的 TikaReader 取纯文本。
+     *
+     * <p>每次新建 reader + 每次新建 {@link BodyContentHandler}（perReadHandler），
+     * 避免框架提示的"复用 content handler 会串文本"问题；chunkSize 取上限以免 Tika 端再切分。
+     */
+    private String tikaText(Path path) {
+        try {
+            TikaReader reader = TikaReader.perReadHandler(1_000_000, SplitStrategy.PARAGRAPH, 0,
+                    () -> new BodyContentHandler(-1));
+            List<Document> documents = reader.read(ReaderInput.fromPath(path))
+                    .block(Duration.ofSeconds(60));
+            if (documents == null || documents.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder();
+            for (Document document : documents) {
+                if (document == null || document.getMetadata() == null) continue;
+                String text = document.getMetadata().getContentText();
+                if (text == null || text.isBlank()) continue;
+                if (sb.length() > 0) sb.append("\n\n");
+                sb.append(text.trim());
+            }
+            return cap(sb.toString());
+        } catch (Exception e) {
+            log.warn("Tika 兜底解析失败：{}", e.getMessage());
+            return "";
+        }
     }
 
     private String extractBytes(byte[] bytes, String ext) throws Exception {
@@ -275,8 +390,8 @@ public class DocumentTextExtractor {
         sb.append("#".repeat(Math.max(0, Math.min(6, level))))
                 .append(level > 0 ? " " : "")
                 .append(text.trim())
-                .append('\n');
-        if (level > 0) sb.append('\n');
+                // 段落之间空一行：切块时一段即一个语义块，段落不会被拼成一大块后被切开
+                .append("\n\n");
     }
 
     /** 样式名形如 Heading1 / 标题 1 / 标题1 → 级别；正文返回 0。 */
@@ -323,17 +438,16 @@ public class DocumentTextExtractor {
         try (InputStream in = new ByteArrayInputStream(bytes);
              XMLSlideShow slideShow = new XMLSlideShow(in)) {
             for (XSLFSlide slide : slideShow.getSlides()) {
-                sb.append("## 第 ").append(slide.getSlideNumber()).append(" 页\n");
+                sb.append("## 第 ").append(slide.getSlideNumber()).append(" 页\n\n");
                 String title = slide.getTitle() == null ? "" : slide.getTitle();
-                if (title != null && !title.isBlank()) sb.append("### ").append(title.trim()).append('\n');
+                if (title != null && !title.isBlank()) sb.append("### ").append(title.trim()).append("\n\n");
                 for (XSLFShape shape : slide.getShapes()) {
                     if (shape instanceof XSLFTextShape textShape) {
                         String text = textShape.getText();
                         if (text == null || text.isBlank() || text.equals(title)) continue;
-                        sb.append(text.trim()).append('\n');
+                        sb.append(text.trim()).append("\n\n");
                     }
                 }
-                sb.append('\n');
                 if (sb.length() >= maxExtractChars) break;
             }
         }
@@ -419,11 +533,16 @@ public class DocumentTextExtractor {
         }
     }
 
-    private static String cell(List<String> row, int index) {
+    private String cell(List<String> row, int index) {
         if (index >= row.size()) return "";
         String value = row.get(index);
         if (value == null) return "";
-        return value.replace("|", "\\|").replace("\n", " ").trim();
+        String escaped = value.replace("|", "\\|").replace("\n", " ").trim();
+        // 单格过长会把整张表撑成超长行，切块时被反复切开；这里显式截断并标注
+        if (maxCellChars > 0 && escaped.length() > maxCellChars) {
+            escaped = escaped.substring(0, maxCellChars) + "…";
+        }
+        return escaped;
     }
 
     private String cellValue(DataFormatter formatter, FormulaEvaluator evaluator, Cell cell) {

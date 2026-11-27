@@ -639,6 +639,7 @@ async function renderSettings(body) {
     ['Rerank', settings.rerankEnabled ? '已启用' : '未启用'],
     ['查询扩展', settings.queryExpansionEnabled ? '已启用' : '未启用'],
     ['分段目标长度', `${settings.chunkTargetChars} 字符`],
+    ['分段硬上限', `${settings.chunkMaxChars} 字符（段落/表格行不跨块）`],
     ['父块上限', `${settings.chunkParentChars} 字符`],
     ['单次重建上限', `${settings.maxReembedChunks} 段`],
     ['分页上限', `${settings.maxPageSize} 段/页`],

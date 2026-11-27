@@ -1,0 +1,40 @@
+{
+  "project": "西北节点新建工程",
+  "nodeCount": 8,
+  "mtu": 9100,
+  "bgpAsn": "64514",
+  "nodes": [
+    {
+      "name": "西安-POP-1",
+      "role": "core"
+    },
+    {
+      "name": "西安-POP-2",
+      "role": "edge"
+    },
+    {
+      "name": "西安-POP-3",
+      "role": "edge"
+    },
+    {
+      "name": "西安-POP-4",
+      "role": "edge"
+    },
+    {
+      "name": "西安-POP-5",
+      "role": "edge"
+    },
+    {
+      "name": "西安-POP-6",
+      "role": "edge"
+    },
+    {
+      "name": "西安-POP-7",
+      "role": "edge"
+    },
+    {
+      "name": "西安-POP-8",
+      "role": "edge"
+    }
+  ]
+}

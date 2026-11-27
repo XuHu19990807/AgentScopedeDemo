@@ -139,4 +139,135 @@ class DocumentChunkerTest {
         assertEquals(1, chunks.get(0).lineStart(), "首块起始行应为 1");
         assertTrue(chunks.get(0).lineEnd() >= 2, "首块应覆盖前两行，实际 " + chunks.get(0).lineEnd());
     }
+
+    // ========== 新增契约：段落/表格行/代码/父块不被切断 ==========
+
+    @Test
+    void paragraphUnderHardLimitIsNotSplit() {
+        StringBuilder paragraph = new StringBuilder();
+        for (int i = 0; i < 20; i++) {
+            paragraph.append("这是第").append(i).append("句用于验证段落整段保留的内容。");
+        }
+        String text = paragraph.toString();
+        assertTrue(text.length() > 360 && text.length() <= 400, "构造 360~400 字符的段落");
+        List<DocumentChunker.Chunk> chunks = chunker.chunk(text, 360, 48, 100, 400);
+
+        assertEquals(1, chunks.size(), "段落长度未超过硬上限时不得切分，实际 " + chunks.size());
+        assertEquals(text, chunks.get(0).content());
+    }
+
+    @Test
+    void longParagraphWithHardLimitKeepsSentenceEnds() {
+        StringBuilder line = new StringBuilder();
+        for (int i = 0; i < 40; i++) {
+            line.append("这是第").append(i).append("句用于验证长段落切分的内容说明。");
+        }
+        List<DocumentChunker.Chunk> chunks = chunker.chunk(line.toString(), 360, 0, 100, 400);
+
+        assertTrue(chunks.size() > 1);
+        for (DocumentChunker.Chunk chunk : chunks) {
+            assertTrue(chunk.content().length() <= 400 + 80, "切分片过长: " + chunk.content().length());
+            assertTrue(chunk.content().trim().endsWith("。"),
+                    "切分点必须在句号后: " + chunk.content().substring(Math.max(0, chunk.content().length() - 20)));
+        }
+    }
+
+    @Test
+    void tablePiecesRepeatHeaderAndKeepRowsWhole() {
+        List<String> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < 60; i++) {
+            rows.add("| 路由器" + i + " | NE8000-X8 | " + i + " 台 | " + (i * 0.42) + " 万元 |");
+        }
+        String text = "| 设备 | 型号 | 数量 | 单价 |\n|---|---|---|---|\n" + String.join("\n", rows);
+        List<DocumentChunker.Chunk> chunks = chunker.chunk(text, 360, 0, 100, 400);
+
+        assertTrue(chunks.size() > 1, "超长表格必须分片，实际 " + chunks.size());
+        long rowCount = 0;
+        for (DocumentChunker.Chunk chunk : chunks) {
+            assertTrue(chunk.content().startsWith("| 设备 | 型号 | 数量 | 单价 |"),
+                    "每个表格分片都必须重复表头: " + chunk.content().substring(0, 20));
+            assertTrue(chunk.content().contains("|---|") || chunk.content().contains("| --- |")
+                            || chunk.content().lines().anyMatch(l -> l.matches("\\|[-|: ]+\\|")),
+                    "分片应含 Markdown 分隔行");
+            assertTrue(chunk.content().length() <= 400 + 48, "表格分片超长: " + chunk.content().length());
+            for (String row : rows) {
+                if (chunk.content().contains(row)) rowCount++;
+            }
+        }
+        assertEquals(rows.size(), rowCount, "每个数据行必须完整出现且只出现一次，实际出现 " + rowCount);
+    }
+
+    @Test
+    void overWideTableRowIsSplitByCellsWithoutLosingText() {
+        StringBuilder row = new StringBuilder("|");
+        for (int i = 0; i < 6; i++) {
+            row.append(" 单元格").append(i).append("内容").append("x".repeat(80)).append(" |");
+        }
+        String text = "| 设备 | 说明 |\n|---|---|\n" + row;
+        List<DocumentChunker.Chunk> chunks = chunker.chunk(text, 360, 0, 100, 400);
+
+        assertTrue(chunks.size() >= 1);
+        StringBuilder joined = new StringBuilder();
+        for (DocumentChunker.Chunk chunk : chunks) {
+            assertTrue(chunk.content().length() <= 400 + 48, "超宽行拆出的块超长: " + chunk.content().length());
+            assertTrue(chunk.content().startsWith("| 设备 | 说明 |"), "拆行后仍要带表头");
+            joined.append(chunk.content());
+        }
+        for (int i = 0; i < 6; i++) {
+            assertTrue(joined.toString().contains("单元格" + i + "内容"), "单元格 " + i + " 文本丢失");
+        }
+    }
+
+    @Test
+    void missingTableSeparatorIsAdded() {
+        String text = "| 设备 | 数量 |\n| 路由器 | 2 |\n| 交换机 | 10 |";
+        String table = "| 设备 | 数量 |\n" + "| 行 | 值 |\n".repeat(80);
+        List<DocumentChunker.Chunk> chunks = chunker.chunk(table, 360, 0, 100, 400);
+        assertTrue(chunks.size() > 1);
+        for (DocumentChunker.Chunk chunk : chunks) {
+            assertTrue(chunk.content().startsWith("| 设备 | 数量 |"));
+            assertTrue(chunk.content().lines().anyMatch(l -> l.matches("\\|[-|: ]+\\|")),
+                    "缺少分隔行时应自动补 |---|");
+        }
+    }
+
+    @Test
+    void codeFenceIsSplitAtLineBoundaries() {
+        StringBuilder code = new StringBuilder("```java\n");
+        for (int i = 0; i < 40; i++) {
+            code.append("int value").append(i).append(" = compute").append(i).append("(input, 2026);\n");
+        }
+        code.append("```");
+        List<DocumentChunker.Chunk> chunks = chunker.chunk(code.toString(), 360, 0, 100, 400);
+
+        assertTrue(chunks.size() > 1, "超长代码块必须按行切分");
+        for (DocumentChunker.Chunk chunk : chunks) {
+            assertTrue(chunk.content().length() <= 400 + 80, "代码块超长: " + chunk.content().length());
+            for (String line : chunk.content().split("\n")) {
+                assertTrue(line.matches("```\\w*|```|int value\\d+ = compute\\d+\\(input, 2026\\);"),
+                        "代码行被切断: " + line);
+            }
+        }
+    }
+
+    @Test
+    void parentTextIsTruncatedAtLineBoundary() {
+        StringBuilder text = new StringBuilder("# 项目方案\n\n");
+        for (int i = 0; i < 60; i++) {
+            text.append("第").append(i).append("段说明文字用于验证父块截断不会切在句子中间。\n\n");
+        }
+        List<DocumentChunker.ParentChunk> parents =
+                chunker.chunkWithParents(text.toString(), 200, 0, 200, 400, 400);
+
+        assertFalse(parents.isEmpty());
+        for (DocumentChunker.ParentChunk parent : parents) {
+            String parentText = parent.parentText();
+            assertTrue(parentText.length() <= 400, "父块超过上限: " + parentText.length());
+            if (parentText.length() == 400) {
+                char last = parentText.charAt(parentText.length() - 1);
+                assertTrue(last == '\n' || last == '。' || last == '；' || last == ';',
+                        "父块必须截断在行/句边界，实际以 [" + last + "] 结尾");
+            }
+        }
+    }
 }

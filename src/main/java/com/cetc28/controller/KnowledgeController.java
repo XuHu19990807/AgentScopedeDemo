@@ -49,18 +49,27 @@ public class KnowledgeController {
     private EmbeddingService embeddingService;
 
     @PostMapping("/upload")
-    public Map<String, Object> uploadFile(@RequestParam("file") MultipartFile file) {
-        KnowledgeBaseService.UploadResult result = knowledgeBaseService.uploadFile(file, null);
+    public Map<String, Object> uploadFile(@RequestParam("file") MultipartFile file,
+                                          @RequestParam(required = false) String domain) {
+        KnowledgeBaseService.UploadResult result = knowledgeBaseService.uploadFile(file, null, null, domain);
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("success", result.success());
         resp.put("message", result.message());
         resp.put("chunkCount", result.chunkCount());
+        resp.put("domain", KnowledgeBaseService.normalizeDomain(domain));
         return resp;
     }
 
     @GetMapping("/files")
-    public List<KnowledgeBaseService.FileMeta> listFiles() {
-        return knowledgeBaseService.listUploadedFiles();
+    public List<KnowledgeBaseService.FileMeta> listFiles(@RequestParam(required = false) String domain) {
+        List<KnowledgeBaseService.FileMeta> files = knowledgeBaseService.listUploadedFiles();
+        if (domain == null || domain.isBlank()) return files;
+        String key = KnowledgeBaseService.normalizeDomain(domain);
+        List<KnowledgeBaseService.FileMeta> filtered = new ArrayList<>(files.size());
+        for (KnowledgeBaseService.FileMeta meta : files) {
+            if (key.equals(meta.effectiveDomain())) filtered.add(meta);
+        }
+        return filtered;
     }
 
     @GetMapping("/content")
@@ -86,17 +95,15 @@ public class KnowledgeController {
     public Map<String, Object> search(@RequestParam String q,
                                       @RequestParam(defaultValue = "6") int topK,
                                       @RequestParam(defaultValue = "hybrid") String mode,
-                                      @RequestParam(required = false) Double minScore) {
-        KnowledgeRetriever.Mode parsed = switch (mode == null ? "" : mode.toLowerCase()) {
-            case "bm25", "text", "fulltext" -> KnowledgeRetriever.Mode.BM25;
-            case "vector", "semantic" -> KnowledgeRetriever.Mode.VECTOR;
-            default -> KnowledgeRetriever.Mode.HYBRID;
-        };
-        RetrievalResult result = retriever.retrieve(q, parsed, topK, minScore);
+                                      @RequestParam(required = false) Double minScore,
+                                      @RequestParam(required = false) String domain) {
+        KnowledgeRetriever.Mode parsed = parseMode(mode);
+        RetrievalResult result = retriever.retrieve(q, parsed, topK, minScore, domain);
 
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("query", q);
         resp.put("mode", parsed.name().toLowerCase());
+        if (domain != null && !domain.isBlank()) resp.put("domain", KnowledgeBaseService.normalizeDomain(domain));
         resp.put("tookMs", result.tookMs());
         resp.put("degraded", result.degraded());
         if (result.degradedReason() != null) resp.put("degradedReason", result.degradedReason());
@@ -120,6 +127,59 @@ public class KnowledgeController {
         return resp;
     }
 
+    /**
+     * 检索诊断：返回稠密/BM25/融合/精排/最终选择各阶段候选与耗时。
+     *
+     * <p>大库调参时用它判断精度损失发生在哪一层（召回不足 vs 融合排序 vs 精排 vs 截断）。
+     */
+    @GetMapping("/diagnostics")
+    public Map<String, Object> diagnostics(@RequestParam String q,
+                                           @RequestParam(defaultValue = "hybrid") String mode,
+                                           @RequestParam(required = false) Integer topK,
+                                           @RequestParam(required = false) String domain) {
+        KnowledgeRetriever.Mode parsed = parseMode(mode);
+        KnowledgeRetriever.Diagnosis diagnosis = retriever.diagnose(q, parsed, topK, domain);
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("query", q);
+        resp.put("mode", parsed.name().toLowerCase());
+        if (domain != null && !domain.isBlank()) resp.put("domain", KnowledgeBaseService.normalizeDomain(domain));
+        resp.put("tookMs", diagnosis.tookMs());
+        resp.put("degraded", diagnosis.degraded());
+        resp.put("denseCount", diagnosis.dense().size());
+        resp.put("bm25Count", diagnosis.bm25().size());
+        resp.put("fusedCount", diagnosis.fused().size());
+        resp.put("rerankedCount", diagnosis.reranked().size());
+        resp.put("selectedCount", diagnosis.selected().size());
+        resp.put("dense", brief(diagnosis.dense()));
+        resp.put("bm25", brief(diagnosis.bm25()));
+        resp.put("fused", brief(diagnosis.fused()));
+        resp.put("reranked", brief(diagnosis.reranked()));
+        resp.put("selected", brief(diagnosis.selected()));
+        return resp;
+    }
+
+    private static KnowledgeRetriever.Mode parseMode(String mode) {
+        return switch (mode == null ? "" : mode.toLowerCase()) {
+            case "bm25", "text", "fulltext" -> KnowledgeRetriever.Mode.BM25;
+            case "vector", "semantic" -> KnowledgeRetriever.Mode.VECTOR;
+            default -> KnowledgeRetriever.Mode.HYBRID;
+        };
+    }
+
+    private static List<Map<String, Object>> brief(List<com.cetc28.rag.ChunkView> views) {
+        List<Map<String, Object>> brief = new ArrayList<>();
+        if (views == null) return brief;
+        for (com.cetc28.rag.ChunkView view : views.subList(0, Math.min(10, views.size()))) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("chunkId", view.chunkId());
+            item.put("filename", view.filename());
+            item.put("headingPath", view.headingPath());
+            item.put("score", view.score());
+            brief.add(item);
+        }
+        return brief;
+    }
+
     /** 索引与向量状态：判断"知识库到底有没有东西可检索"不用再猜 */
     @GetMapping("/stats")
     public KnowledgeBaseService.KnowledgeStats stats() {
@@ -130,7 +190,7 @@ public class KnowledgeController {
     @GetMapping("/semantic")
     public Map<String, Object> semanticSearch(@RequestParam String q,
                                               @RequestParam(defaultValue = "5") int topK) {
-        return search(q, topK, "vector", null);
+        return search(q, topK, "vector", null, null);
     }
 
     /**
@@ -197,6 +257,7 @@ public class KnowledgeController {
                 props.getRerank().isEnabled(),
                 props.getQueryExpansion().isEnabled(),
                 props.getChunk().getTargetChars(),
+                props.getChunk().getMaxChars(),
                 props.getChunk().getParentMaxChars(),
                 props.getEdit().getMaxReembedChunks(),
                 props.getEdit().getMaxPageSize(),
@@ -207,7 +268,18 @@ public class KnowledgeController {
                 props.getRetrieve().getRrfK(),
                 props.getRetrieve().getTopK(),
                 props.getRetrieve().getCandidateLimit(),
-                props.getRetrieve().getMinVectorSimilarity());
+                props.getRetrieve().getMinVectorSimilarity(),
+                props.getRetrieve().getDenseCandidateLimit(),
+                props.getRetrieve().getBm25CandidateLimit(),
+                props.getRetrieve().getMaxPerDoc(),
+                props.getRetrieve().getMaxPerHeading(),
+                props.getRetrieve().isDedupe(),
+                props.getRetrieve().getSimilarityFilter(),
+                props.getMilvus().getDenseMode(),
+                props.getMilvus().getIndex().getType(),
+                props.getMilvus().getIndex().getEfSearch(),
+                props.getRerank().getTopN(),
+                props.getRerank().getMaxCandidates());
     }
 
     @PostMapping("/chunk/update")
@@ -267,9 +339,13 @@ public class KnowledgeController {
     public record KnowledgeSettings(String provider, String denseCollection, String bm25Collection,
                                     int dimension, String embeddingTarget, boolean embeddingEnabled,
                                     boolean rerankEnabled, boolean queryExpansionEnabled,
-                                    int chunkTargetChars, int chunkParentChars,
+                                    int chunkTargetChars, int chunkMaxChars, int chunkParentChars,
                                     int maxReembedChunks, int maxPageSize, int maxChunkChars,
                                     String storageDir, double denseWeight, double bm25Weight,
-                                    int rrfK, int topK, int candidateLimit, double minVectorSimilarity) {
+                                    int rrfK, int topK, int candidateLimit, double minVectorSimilarity,
+                                    int denseCandidateLimit, int bm25CandidateLimit,
+                                    int maxPerDoc, int maxPerHeading, boolean dedupe,
+                                    String similarityFilter, String denseMode, String indexType,
+                                    int efSearch, int rerankTopN, int rerankMaxCandidates) {
     }
 }

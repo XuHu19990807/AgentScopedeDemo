@@ -1,0 +1,32 @@
+{
+  "project": "华东区光纤专线",
+  "nodeCount": 6,
+  "mtu": 9000,
+  "bgpAsn": "64512",
+  "nodes": [
+    {
+      "name": "上海-POP-1",
+      "role": "core"
+    },
+    {
+      "name": "上海-POP-2",
+      "role": "edge"
+    },
+    {
+      "name": "上海-POP-3",
+      "role": "edge"
+    },
+    {
+      "name": "上海-POP-4",
+      "role": "edge"
+    },
+    {
+      "name": "上海-POP-5",
+      "role": "edge"
+    },
+    {
+      "name": "上海-POP-6",
+      "role": "edge"
+    }
+  ]
+}

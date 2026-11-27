@@ -14,6 +14,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import jakarta.annotation.PostConstruct;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -78,13 +79,49 @@ public class KnowledgeBaseService {
     public record UploadResult(boolean success, String message, int chunkCount) {
     }
 
+    /**
+     * 启动自检：块硬上限 + 标题前缀不能超过 embedding 的 token 预算，否则块尾会被 embedding 服务截断，
+     * 造成"块里有、检索不到"。这里只告警，不阻断启动（不同 embedding 模型预算不同）。
+     */
+    @PostConstruct
+    void warnChunkBudget() {
+        int maxChars = props.getChunk().getMaxChars();
+        int maxTokens = props.getEmbed().getDimension() >= 0 ? embeddingMaxTokens() : 0;
+        int budget = maxTokens - 60;
+        if (maxTokens > 0 && maxChars + 120 > budget) {
+            log.warn("切块硬上限 {} 字符 + 标题/文件名前缀 120 超过 embedding 预算 {} token，"
+                            + "块尾可能被 embedding 截断；建议调小 rag.chunk.max-chars 或换更大上下文的 embedding 模型",
+                    maxChars, budget);
+        }
+    }
+
+    private int embeddingMaxTokens() {
+        try {
+            return embeddingService.maxTokens();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     public record FileMeta(String filename, long fileSize, String uploadTime, int chunkCount,
                            String handledBy, String docId, double sortOrder, boolean hasOriginal,
-                           int disabledCount, long updatedAt) {
+                           int disabledCount, long updatedAt, String domain) {
         /** 兼容旧调用点（无编辑态字段）。 */
         public FileMeta(String filename, long fileSize, String uploadTime, int chunkCount,
                         String handledBy, String docId) {
-            this(filename, fileSize, uploadTime, chunkCount, handledBy, docId, 0, false, 0, 0);
+            this(filename, fileSize, uploadTime, chunkCount, handledBy, docId, 0, false, 0, 0, null);
+        }
+
+        public FileMeta(String filename, long fileSize, String uploadTime, int chunkCount,
+                        String handledBy, String docId, double sortOrder, boolean hasOriginal,
+                        int disabledCount, long updatedAt) {
+            this(filename, fileSize, uploadTime, chunkCount, handledBy, docId, sortOrder, hasOriginal,
+                    disabledCount, updatedAt, null);
+        }
+
+        /** 空域归一到 default，便于筛选与展示。 */
+        public String effectiveDomain() {
+            return domain == null || domain.isBlank() ? StoredChunk.DEFAULT_DOMAIN : domain.trim();
         }
 
         public String formattedSize() {
@@ -99,22 +136,27 @@ public class KnowledgeBaseService {
 
         public FileMeta withSortOrder(double order) {
             return new FileMeta(filename, fileSize, uploadTime, chunkCount, handledBy, docId,
-                    order, hasOriginal, disabledCount, updatedAt);
+                    order, hasOriginal, disabledCount, updatedAt, domain);
         }
 
         public FileMeta withChunkCount(int count) {
             return new FileMeta(filename, fileSize, uploadTime, count, handledBy, docId,
-                    sortOrder, hasOriginal, disabledCount, System.currentTimeMillis());
+                    sortOrder, hasOriginal, disabledCount, System.currentTimeMillis(), domain);
         }
 
         public FileMeta withDisabledCount(int count) {
             return new FileMeta(filename, fileSize, uploadTime, chunkCount, handledBy, docId,
-                    sortOrder, hasOriginal, count, System.currentTimeMillis());
+                    sortOrder, hasOriginal, count, System.currentTimeMillis(), domain);
         }
 
         public FileMeta withOriginal(boolean original) {
             return new FileMeta(filename, fileSize, uploadTime, chunkCount, handledBy, docId,
-                    sortOrder, original, disabledCount, updatedAt);
+                    sortOrder, original, disabledCount, updatedAt, domain);
+        }
+
+        public FileMeta withDomain(String newDomain) {
+            return new FileMeta(filename, fileSize, uploadTime, chunkCount, handledBy, docId,
+                    sortOrder, hasOriginal, disabledCount, updatedAt, newDomain);
         }
     }
 
@@ -135,10 +177,18 @@ public class KnowledgeBaseService {
     // ========== 上传 ==========
 
     public UploadResult uploadFile(MultipartFile file, Map<String, String> extraMetadata) {
-        return uploadFile(file, extraMetadata, null);
+        return uploadFile(file, extraMetadata, null, null);
     }
 
     public UploadResult uploadFile(MultipartFile file, Map<String, String> extraMetadata, String filenameOverride) {
+        return uploadFile(file, extraMetadata, filenameOverride, null);
+    }
+
+    /**
+     * @param domain 知识域；为空时取 extraMetadata 的 domain，再缺省为 {@code default}
+     */
+    public UploadResult uploadFile(MultipartFile file, Map<String, String> extraMetadata,
+                                   String filenameOverride, String domain) {
         if (file == null || file.isEmpty()) return new UploadResult(false, "文件为空", 0);
         String filename = filenameOverride != null && !filenameOverride.isBlank()
                 ? filenameOverride : file.getOriginalFilename();
@@ -151,6 +201,7 @@ public class KnowledgeBaseService {
             return new UploadResult(false, "embedding 未启用，无法写入 Milvus 向量库（检查 agentscope.embedding 配置）", 0);
         }
         String docId = docIdOf(filename);
+        String domainKey = normalizeDomain(domain, extraMetadata);
         try {
             String text = extractor.extract(file, ext);
             if (text == null || text.isBlank()) {
@@ -161,7 +212,8 @@ public class KnowledgeBaseService {
                     props.getChunk().getTargetChars(),
                     props.getChunk().getOverlapChars(),
                     props.getChunk().getMaxChunksPerFile(),
-                    props.getChunk().getParentMaxChars());
+                    props.getChunk().getParentMaxChars(),
+                    props.getChunk().getMaxChars());
             List<StoredChunk> stored = new ArrayList<>();
             List<String> embedTexts = new ArrayList<>();
             int skipped = 0;
@@ -185,7 +237,8 @@ public class KnowledgeBaseService {
                         chunk.headingPath(),
                         chunk.lineStart(),
                         chunk.lineEnd(),
-                        chunk.contentHash());
+                        chunk.contentHash(),
+                        domainKey);
                 stored.add(storedChunk);
                 embedTexts.add(storedChunk.embeddingText());
             }
@@ -214,7 +267,7 @@ public class KnowledgeBaseService {
                     ? existing.sortOrder() : System.currentTimeMillis();
             FileMeta meta = new FileMeta(filename, file.getSize(), Instant.now().toString(), toWrite.size(),
                     capabilityChecker == null ? null : capabilityChecker.findCapableProcessor(filename).orElse(null),
-                    docId, sortOrder, true, 0, System.currentTimeMillis());
+                    docId, sortOrder, true, 0, System.currentTimeMillis(), domainKey);
             saveMetadata(meta);
             String message = "上传成功：解析 " + toWrite.size() + " 个块"
                     + (skipped > 0 ? "（跳过 " + skipped + " 个过短片段）" : "")
@@ -473,11 +526,39 @@ public class KnowledgeBaseService {
             case ".html", ".htm" -> "HTML 网页（" + ext + "）";
             case ".xml" -> "XML 数据（" + ext + "）";
             case ".yaml", ".yml" -> "YAML 配置（" + ext + "）";
+            case ".rtf" -> "RTF 富文本文档（" + ext + "）";
+            case ".odt" -> "OpenDocument 文本文档（" + ext + "）";
+            case ".ods" -> "OpenDocument 表格（" + ext + "）";
+            case ".odp" -> "OpenDocument 演示文稿（" + ext + "）";
+            case ".epub" -> "EPUB 电子书（" + ext + "）";
+            case ".eml", ".msg" -> "邮件文件（" + ext + "）";
+            case ".wps", ".et", ".dps" -> "WPS Office 文档（" + ext + "）";
             default -> "文本文件（" + (ext.isEmpty() ? "无扩展名" : ext) + "）";
         };
     }
 
     // ========== 工具 ==========
+
+    /** 域归一：显式参数优先，其次 extraMetadata.domain，最后 default；长度截断到 64。 */
+    public static String normalizeDomain(String domain, Map<String, String> extraMetadata) {
+        String value = domain;
+        if ((value == null || value.isBlank()) && extraMetadata != null) {
+            value = extraMetadata.get("domain");
+        }
+        if (value == null || value.isBlank()) return StoredChunk.DEFAULT_DOMAIN;
+        String trimmed = value.trim();
+        return trimmed.length() > 64 ? trimmed.substring(0, 64) : trimmed;
+    }
+
+    public static String normalizeDomain(String domain) {
+        return normalizeDomain(domain, null);
+    }
+
+    /** 文档所属域（读元数据；未知文档回 default）。 */
+    public String domainOf(String filename) {
+        FileMeta meta = fileMetaOrNull(filename);
+        return meta == null ? StoredChunk.DEFAULT_DOMAIN : meta.effectiveDomain();
+    }
 
     public static String docIdOf(String filename) {
         return DocumentChunker.sha256(filename == null ? "" : filename).substring(0, 16);

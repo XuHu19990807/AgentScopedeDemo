@@ -40,7 +40,9 @@ public class MilvusClientProvider implements AutoCloseable {
             if (client != null && !closed) return client;
             ConnectConfig.ConnectConfigBuilder builder = ConnectConfig.builder()
                     .uri(props.getMilvus().getUri())
-                    .connectTimeoutMs(props.getMilvus().getConnectTimeoutMs());
+                    .connectTimeoutMs(props.getMilvus().getConnectTimeoutMs())
+                    // 单次 RPC 必须有截止时间：否则服务端拒绝（如非 UTF-8 字符串）时 SDK 会长时间重试
+                    .rpcDeadlineMs(Math.max(3000L, props.getRetrieve().getTimeoutMs()));
             if (!isBlank(props.getMilvus().getToken())) {
                 builder.token(props.getMilvus().getToken());
             } else if (!isBlank(props.getMilvus().getUsername())) {

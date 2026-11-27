@@ -39,6 +39,14 @@ public class RagProperties {
         private int overlapChars = 48;
         /** 单文件最大块数，防止超大文件把向量库写满 */
         private int maxChunksPerFile = 5000;
+        /**
+         * 单块硬上限字符数：块长不超过此值（重叠另计）。
+         *
+         * <p>打包时以 max(targetChars, maxChars) 为上限——宁可块略大，也不把段落/表格行切两半；
+         * 仅当单个语义块本身超过硬上限时才切分。默认 400 与 embedding max-tokens=512（中文约
+         * 1 token/字符，预留文件名/标题前缀开销）匹配。
+         */
+        private int maxChars = 400;
         /** 父块（注入模型时展开的上下文）最大字符数 */
         private int parentMaxChars = 1200;
         /** 估算 token 上限，超过则先切小再嵌入（避免 embedding 静默截断导致块尾丢失） */
@@ -60,8 +68,12 @@ public class RagProperties {
     @Data
     public static class Retrieve {
         /** 最终注入/返回的条数 */
-        private int topK = 6;
-        /** 单路召回候选条数（稠密与 BM25 各取这么多，再融合） */
+        private int topK = 8;
+        /** 稠密路召回候选条数（大候选集是精排的前提，规模大时靠精排收敛） */
+        private int denseCandidateLimit = 200;
+        /** BM25 路召回候选条数 */
+        private int bm25CandidateLimit = 300;
+        /** 兼容兜底：两路各自的候选数未配置（<=0）时用它 */
         private int candidateLimit = 40;
         /** RRF 融合参数 */
         private int rrfK = 60;
@@ -70,13 +82,22 @@ public class RagProperties {
         /** BM25 路在 RRF 中的权重 */
         private double bm25Weight = 0.8;
         /** 同一文件最多保留几条，避免一个文件刷屏 */
-        private int maxPerDoc = 4;
+        private int maxPerDoc = 3;
+        /** 同一标题路径最多保留几条，提升注入内容的多样性 */
+        private int maxPerHeading = 2;
+        /** 是否按正文哈希去重（重复段落只保留第一条） */
+        private boolean dedupe = true;
         /** 单次检索超时（毫秒） */
         private long timeoutMs = 2500;
         /** 融合分数下限（0 = 不过滤） */
         private double minScore = 0.0;
-        /** 向量路的余弦相似度下限：低于它的块直接丢弃 */
-        private double minVectorSimilarity = 0.2;
+        /** 向量相似度下限 */
+        private double minVectorSimilarity = 0.15;
+        /**
+         * 向量相似度过滤时机：pre = 检索时直接丢弃；post = 先取候选，精排后再丢弃
+         * （post 才不会因为阈值把"表述不同但语义接近"的正确块提前踢掉）。
+         */
+        private String similarityFilter = "post";
     }
 
     @Data
@@ -106,14 +127,18 @@ public class RagProperties {
     @Data
     public static class Rerank {
         /** 精排开关；接口不可达时自动退回 RRF 顺序 */
-        private boolean enabled = false;
+        private boolean enabled = true;
         /** DashScope text-rerank 兼容地址 */
         private String baseUrl = "";
         private String apiKey = "";
         private String model = "gte-rerank-v2";
-        /** 送去精排的候选条数 */
-        private int topN = 20;
-        private long timeoutMs = 1500;
+        /** 精排后保留的候选条数 */
+        private int topN = 100;
+        /** 送去精排的候选上限（精排是最贵的一步，需要封顶） */
+        private int maxCandidates = 200;
+        /** 单次精排请求的文档条数（DashScope 单请求有上限） */
+        private int batchSize = 50;
+        private long timeoutMs = 3000;
     }
 
     @Data
@@ -134,8 +159,8 @@ public class RagProperties {
         private String token = "";
         private String username = "";
         private String password = "";
-        /** 集合版本后缀：变更 embedding 模型/维度时改版本号，旧集合保留可回退 */
-        private String collectionVersion = "v1";
+        /** 集合版本后缀：变更 embedding 模型/维度/索引参数时改版本号，旧集合保留可回退 */
+        private String collectionVersion = "v3";
         /** 稠密集合名 */
         private String denseCollection = "rag_dense";
         /** BM25 稀疏集合名 */
@@ -146,6 +171,24 @@ public class RagProperties {
         private String analyzer = "chinese";
         /** 是否在启动后建集合（Milvus 不可用时不阻塞启动） */
         private boolean ensureOnStartup = true;
+        /**
+         * 稠密检索实现：auto = 先试原生检索、失败回落框架；native = 只走原生；
+         * framework = 只走框架 SimpleKnowledge（保留旧行为便于回退）。
+         */
+        private String denseMode = "auto";
+        private Index index = new Index();
+
+        @Data
+        public static class Index {
+            /** 稠密向量索引类型：HNSW | AUTOINDEX | IVF_FLAT ... */
+            private String type = "HNSW";
+            /** HNSW 出边数：越大召回越高、内存越大 */
+            private int m = 32;
+            /** HNSW 建图深度：越大建图越慢、召回越高 */
+            private int efConstruction = 200;
+            /** HNSW 查询深度：越大召回越高、延迟越高 */
+            private int efSearch = 128;
+        }
     }
 
     @Data
