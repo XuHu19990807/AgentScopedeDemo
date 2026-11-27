@@ -155,21 +155,23 @@ worker Agent 关闭记忆流水线与工作区上下文，避免每个子任务�
 ```yaml
 rag:
   chunk:
-    target-chars: 360
+    target-chars: 360        # 打包目标（软上限）
+    max-chars: 400           # 打包硬上限：段落/表格行在硬上限内整段保留，超了才切
     overlap-chars: 48
     parent-max-chars: 1200
   retrieve:
-    top-k: 6
-    candidate-limit: 40
+    top-k: 8
+    dense-candidate-limit: 200
+    bm25-candidate-limit: 300
     rrf-k: 60
     dense-weight: 1.0
     bm25-weight: 0.8
-    max-per-doc: 4
-    min-vector-similarity: 0.2
+    max-per-doc: 3
+    min-vector-similarity: 0.15
   milvus:
     uri: http://127.0.0.1:19530
     database: default
-    collection-version: v1         # 集合名后缀：换 embedding 维度时改版本即可并存
+    collection-version: v3         # 集合名后缀：换 embedding 维度/索引参数时升版本即可并存
     dense-collection: rag_dense
     bm25-collection: rag_bm25
     metric: COSINE
@@ -287,6 +289,97 @@ agentchat:
 > 模型配置里的密钥在接口返回时一律脱敏为 `sk-****`，前端回传 `****` 或空值表示"沿用原密钥"。
 > 切换 Embedding 并重建索引期间，检索仍可工作：新集合是空的，旧集合保留到新集合写完为止；重建完成后旧集合不再被引用，可手工清理。
 
+### 4.9 大知识库检索精度优化
+
+当分段规模到百万/千万级时，单靠"取前 40 条 + 阈值过滤"会明显掉精度。检索链路已改成 **双路大候选 → 加权 RRF → 精排 → 后置过滤 → 多样性选择** 的漏斗：
+
+- **候选集**：稠密与 BM25 各取 `dense-candidate-limit=200` / `bm25-candidate-limit=300`（`candidate-limit=40` 只作兜底）；`min-vector-similarity` 默认后置（`similarity-filter: post`），避免在召回阶段误杀语义相近但余弦偏低的片段。
+- **精排**：`rerank.enabled=true`，最多对 `max-candidates=200` 条分批评分（`batch-size=50`，DashScope `gte-rerank-v2`），`top-n=100`；`rag.rerank.api-key` 留空时自动沿用默认 Embedding 配置里的 DashScope key；无 key、超时或响应异常会原样保留融合分数并在 `degradedReason` 里说明。
+- **多样性**：精排后由 `RagSelector` 做内容哈希去重、同标题 ≤ `max-per-heading=2`、同文档 ≤ `max-per-doc=3`，再截断到 `top-k=8`。
+- **索引**：稠密集合首次创建时用原生 SDK 预建 HNSW 索引（`m=32 / efConstruction=200 / efSearch=128`，见 `rag.milvus.index`），`dense-mode: auto` 时优先走原生检索（自带 `payload["domain"]` 过滤），失败自动回退框架 `SimpleKnowledge` 路径。改动索引参数或 Embedding 维度时把 `collection-version` 升一档（当前 `v3`），`ModelConfigStore` 会采纳更大的版本号并触发重建。
+- **域隔离**：文档可带 `domain`（上传参数 `domain`，默认 `default`），BM25 集合有 `domain` 字段、稠密集合写进 payload，检索可只查某个域；工作台提供域筛选与域徽章，上传时可指定域。
+- **可观测**：`GET /api/knowledge/diagnostics?q=...&mode=hybrid&topK=8&domain=...` 返回密集路/BM25/融合/精排/选择各阶段条数、耗时与阶段内前 10 条明细，用于定位"召回不到"还是"排不上去"。
+
+新增/变更配置：
+
+```yaml
+rag:
+  retrieve:
+    top-k: 8
+    dense-candidate-limit: 200
+    bm25-candidate-limit: 300
+    max-per-doc: 3
+    max-per-heading: 2
+    dedupe: true
+    similarity-filter: post        # pre：召回阶段下推相似度阈值；post：精排后过滤
+    min-vector-similarity: 0.15
+  rerank:
+    enabled: true
+    top-n: 100
+    max-candidates: 200
+    batch-size: 50
+    timeout-ms: 3000
+  milvus:
+    dense-mode: auto               # auto | native | framework
+    index:
+      type: HNSW
+      m: 32
+      ef-construction: 200
+      ef-search: 128
+```
+
+评测有两个入口：
+
+```bash
+# 单文档回归（12 题，关键词命中）
+mvn test -Dtest=RagEvalTest -Drag.eval=true
+
+# 多格式数据集（3 域 × 6 格式 = 18 文件，120 题；语料由 scripts/gen_rag_eval.py 生成）
+mvn test -Dtest=RagEvalDatasetTest -Drag.eval=true
+```
+
+`RagEvalDatasetTest` 会打印每个域的 `Recall@6 / Recall@20 / MRR@6 / nDCG@10`，阈值可用 `-Drag.eval.recall6=0.85` 等系统属性覆盖；两个评测都要求 Milvus 与 Embedding 服务可用，默认不参与常规 `mvn test`。
+
+当前基线（120 题，集合 v3）：`Recall@6=0.958`、`Recall@20=0.983`、`MRR@6=0.801`、`nDCG@10=0.847`，
+检索耗时 avg=361ms / p95=517ms（含精排）；分域指标与已知短板见 [docs/rag-baseline.md](docs/rag-baseline.md)。
+
+### 4.10 多格式解析与切片
+
+解析与切片是两段式：先把各格式统一转成"带标题层级的 Markdown 文本"，再按语义块切分。目标是**Word 不切断段落与句子、Excel 不切断行、其他格式不切断语句**。
+
+**解析层**（`DocumentTextExtractor`）：
+
+- `.docx`：按 `getBodyElements()` 顺序遍历，段落按样式转 Markdown 标题（`HeadingN`/`标题 N` → `#`，最多 6 级），表格整表转 Markdown；**相邻段落用空行（`\n\n`）分隔**，保证段落能被识别为独立语义块。
+- `.xlsx/.xls`：每个 Sheet 输出 `## Sheet: 名称` + 整表 Markdown（首行表头、`|` 转义、跳过全空行、超 `max-excel-rows` 行截断）；单个单元格超过 `max-excel-cell-chars` 时截断并加 `…`，避免一格撑爆整块。
+- `.pptx/.ppt`、`.pdf`：按页输出 `## 第 N 页` / `=== 第 N 页 ===`，PDF 额外去页眉页脚、断词连字符与连续空行。
+- `.rtf/.odt/.ods/.odp/.epub/.eml/.msg/.wps/.et/.dps`：复用 AgentScope `TikaReader` 解析（`tika-parsers-standard-package` 随 `agentscope-extensions-rag-simple` 传递引入，无需新增依赖）。现有格式解析失败时也会回退 Tika 兜底，`chat.files.tika-fallback=false` 可关闭。
+- 文本类（`.txt/.md/.csv/.json/.html` 等）按 BOM → UTF-8 → GB18030 顺序解码，HTML/XML 去标签。
+
+**切片层**（`DocumentChunker`，仍为自研实现）：
+
+- 块模型：HEADING / PARAGRAPH / LIST / CODE / TABLE / SEPARATOR。标题行独立成块并推进 `headingPath`；连续 `|` 行合成一张表；代码围栏内按行处理。
+- 打包：`hard = max(target-chars, max-chars)`。**块长不超过 hard 时绝不切分**——整段段落、整行表格都会完整保留；只有超过 hard 才切。
+- 切分点：优先在前向 `[hard, hard+min(80, hard/4)]` 找换行或句末标点（`。！？；!?;`），找不到再向后找，最后才硬切并告警。分片之间不叠加 overlap，避免重复内容。
+- 表格：超长表格按行分片，**每一片都重复表头与分隔行**；单行超预算时按未转义 `|` 拆单元格重建多行，单元格文本零丢失；缺少 `|---|` 分隔行时自动补。
+- 父子块：同一 `headingPath` 的连续子块拼成父块（`parent-max-chars=1200`），截断时用 `truncateAtBoundary` 落在行/句边界，不再切在句子中间。
+- 预算校验：启动时若 `max-chars + 120` 超过 Embedding 的 `max-tokens - 60`，`KnowledgeBaseService` 会打印告警，提示换更大上下文的 Embedding 模型或调小 `max-chars`。
+
+切片质量由三组测试守护：`DocumentChunkerTest`（段落整段保留、长段落句末切分、表格每片带表头）、`DocumentTextExtractorTest`（docx 段落空行、单元格截断、Tika 兜底）、`ChunkingQualityTest`（18 个多格式真实语料上的四条契约）。
+
+涉及配置：
+
+```yaml
+rag:
+  chunk:
+    max-chars: 400                    # 打包硬上限（RAG_CHUNK_MAX_CHARS）
+chat:
+  files:
+    max-excel-cell-chars: 1000        # 单单元格字符上限
+    tika-fallback: true               # 现有解析器失败时回退 TikaReader
+```
+
+> 注意：Milvus BM25 中文检索依赖 JVM 默认字符集，因此 `pom.xml` 的 surefire 已固定 `-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8`；本地/容器启动应用时同样要带上这两个参数（`EncodingGuard` 会在启动时告警）。
+
 ## 6. 主要配置
 
 
@@ -346,7 +439,8 @@ mvn test          # 单元测试（含状态隔离、注入、编排、SSE 映�
 mvn verify        # 打包 + 测试
 ```
 
-当前基线：235 个测试通过（1 skipped），其中地图/标绘相关 28 个。
+当前基线：256 个测试通过（2 skipped，含需要 `-Drag.eval=true` 才运行的 RAG 评测），其中地图/标绘相关 28 个。
+surefire 已固定 `-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8`：Milvus BM25 中文检索依赖 JVM 默认字符集，测试 JVM 与生产 JVM 必须一致。
 
 ## 9. 已知限制
 

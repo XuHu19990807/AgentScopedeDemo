@@ -9,11 +9,18 @@ import io.agentscope.core.rag.model.DocumentMetadata;
 import io.agentscope.core.rag.model.RetrieveConfig;
 import io.agentscope.core.rag.store.MilvusStore;
 import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.common.ConsistencyLevel;
+import io.milvus.v2.common.DataType;
 import io.milvus.v2.common.IndexParam;
+import io.milvus.v2.service.collection.request.AddFieldReq;
+import io.milvus.v2.service.collection.request.CreateCollectionReq;
 import io.milvus.v2.service.collection.request.HasCollectionReq;
 import io.milvus.v2.service.collection.request.LoadCollectionReq;
 import io.milvus.v2.service.vector.request.QueryReq;
+import io.milvus.v2.service.vector.request.SearchReq;
+import io.milvus.v2.service.vector.request.data.FloatVec;
 import io.milvus.v2.service.vector.response.QueryResp;
+import io.milvus.v2.service.vector.response.SearchResp;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -47,6 +54,7 @@ public class MilvusRagStore {
     public static final String PAYLOAD_LINE_END = "line_end";
     public static final String PAYLOAD_CHUNK_INDEX = "chunk_index";
     public static final String PAYLOAD_PARENT = "parent_text";
+    public static final String PAYLOAD_DOMAIN = "domain";
 
     private static final Duration OP_TIMEOUT = Duration.ofSeconds(20);
 
@@ -63,6 +71,8 @@ public class MilvusRagStore {
     private final AtomicReference<Holder> holder = new AtomicReference<>();
     private final Object lock = new Object();
     private volatile String lastError;
+    private volatile boolean nativeDisabled;
+    private volatile String nativeDisabledReason;
 
     private record Holder(SimpleKnowledge knowledge, MilvusStore store, String collection) {
     }
@@ -105,6 +115,7 @@ public class MilvusRagStore {
                 int dimension = resolveDimension();
                 MilvusClientV2 client = clients.client();
                 String collection = collectionName();
+                ensureDenseCollection(client, collection, dimension);
                 boolean exists = Boolean.TRUE.equals(client.hasCollection(
                         HasCollectionReq.builder().collectionName(collection).build()));
                 MilvusStore.Builder builder = MilvusStore.builder()
@@ -160,6 +171,61 @@ public class MilvusRagStore {
         return detected;
     }
 
+    /**
+     * 首次写入前用原生 SDK 预建稠密集合（HNSW 索引）。
+     *
+     * <p>框架 {@link MilvusStore} 建集合只能 AUTOINDEX，无法指定 M/efConstruction；这里按框架的
+     * 字段布局预建同 schema 集合，框架随后会发现集合已存在而直接复用。预建失败时只告警，
+     * 由框架自行建 AUTOINDEX 集合（检索仍可用，原生检索会回退）。
+     */
+    private void ensureDenseCollection(MilvusClientV2 client, String collection, int dimension) {
+        if (!"HNSW".equalsIgnoreCase(props.getMilvus().getIndex().getType())) return;
+        try {
+            if (Boolean.TRUE.equals(client.hasCollection(
+                    HasCollectionReq.builder().collectionName(collection).build()))) {
+                return;
+            }
+            CreateCollectionReq.CollectionSchema schema = client.createSchema();
+            schema.addField(AddFieldReq.builder()
+                    .fieldName("id").dataType(DataType.VarChar).maxLength(64)
+                    .isPrimaryKey(true).autoID(false).build());
+            schema.addField(AddFieldReq.builder()
+                    .fieldName("vector").dataType(DataType.FloatVector).dimension(dimension).build());
+            schema.addField(AddFieldReq.builder()
+                    .fieldName("doc_id").dataType(DataType.VarChar).maxLength(256).build());
+            schema.addField(AddFieldReq.builder()
+                    .fieldName("chunk_id").dataType(DataType.VarChar).maxLength(256).build());
+            schema.addField(AddFieldReq.builder()
+                    .fieldName("content").dataType(DataType.VarChar).maxLength(65535).build());
+            schema.addField(AddFieldReq.builder()
+                    .fieldName("payload").dataType(DataType.JSON).build());
+            schema.setEnableDynamicField(true);
+
+            RagProperties.Milvus.Index index = props.getMilvus().getIndex();
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("M", index.getM());
+            params.put("efConstruction", index.getEfConstruction());
+            IndexParam vectorIndex = IndexParam.builder()
+                    .fieldName("vector")
+                    .indexType(IndexParam.IndexType.HNSW)
+                    .metricType(IndexParam.MetricType.valueOf(props.getMilvus().getMetric()))
+                    .extraParams(params)
+                    .build();
+            client.createCollection(CreateCollectionReq.builder()
+                    .collectionName(collection)
+                    .description("RAG 稠密向量（HNSW）")
+                    .collectionSchema(schema)
+                    .indexParams(List.of(vectorIndex))
+                    .consistencyLevel(ConsistencyLevel.STRONG)
+                    .build());
+            client.loadCollection(LoadCollectionReq.builder().collectionName(collection).build());
+            log.info("已按 HNSW 预建稠密集合 {}（dimension={}，M={}，efConstruction={}）",
+                    collection, dimension, index.getM(), index.getEfConstruction());
+        } catch (Exception e) {
+            log.warn("原生预建 HNSW 集合失败，将由框架建 AUTOINDEX 集合：{}", e.getMessage());
+        }
+    }
+
     /** 写入一批块：稠密集合 + BM25 集合，任一失败则双删回滚。 */
     public void upsert(List<StoredChunk> chunks, List<float[]> vectors) {
         if (chunks == null || chunks.isEmpty()) return;
@@ -169,26 +235,7 @@ public class MilvusRagStore {
         Holder current = holder();
         List<Document> documents = new ArrayList<>(chunks.size());
         for (int i = 0; i < chunks.size(); i++) {
-            StoredChunk chunk = chunks.get(i);
-            float[] vector = vectors.get(i);
-            double[] embedding = new double[vector.length];
-            for (int d = 0; d < vector.length; d++) embedding[d] = vector[d];
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put(PAYLOAD_FILENAME, chunk.filename());
-            payload.put(PAYLOAD_HEADING, chunk.headingPath());
-            payload.put(PAYLOAD_LINE_START, chunk.lineStart());
-            payload.put(PAYLOAD_LINE_END, chunk.lineEnd());
-            payload.put(PAYLOAD_CHUNK_INDEX, chunk.chunkIndex());
-            if (chunk.parentText() != null) payload.put(PAYLOAD_PARENT, chunk.parentText());
-            DocumentMetadata metadata = DocumentMetadata.builder()
-                    .content(TextBlock.builder().text(chunk.embeddingText()).build())
-                    .docId(chunk.docId())
-                    .chunkId(chunk.chunkId())
-                    .payload(payload)
-                    .build();
-            Document document = new Document(metadata);
-            document.setEmbedding(embedding);
-            documents.add(document);
+            documents.add(toDocument(chunks.get(i), vectors.get(i)));
         }
         try {
             current.store().add(documents).block(OP_TIMEOUT);
@@ -277,6 +324,7 @@ public class MilvusRagStore {
         payload.put(PAYLOAD_LINE_START, chunk.lineStart());
         payload.put(PAYLOAD_LINE_END, chunk.lineEnd());
         payload.put(PAYLOAD_CHUNK_INDEX, chunk.chunkIndex());
+        payload.put(PAYLOAD_DOMAIN, chunk.effectiveDomain());
         if (chunk.parentText() != null) payload.put(PAYLOAD_PARENT, chunk.parentText());
         DocumentMetadata metadata = DocumentMetadata.builder()
                 .content(TextBlock.builder().text(chunk.embeddingText()).build())
@@ -337,8 +385,67 @@ public class MilvusRagStore {
         return hits;
     }
 
-    public long count() {
-        try {
+    /**
+     * 原生向量检索（{@link MilvusClientV2#search}）：支持 expr 过滤与 HNSW 的 ef 参数。
+     *
+     * <p>框架 {@code MilvusStore.search} 不支持过滤，大库分域/按文档过滤只能走这里；
+     * 失败由调用方回退到框架路径。
+     */
+    public List<DenseHit> searchNative(String query, int limit, String filter, Integer ef) {
+        if (nativeDisabled) {
+            throw new IllegalStateException("原生稠密检索已禁用：" + nativeDisabledReason);
+        }
+        if (query == null || query.isBlank() || limit <= 0) return List.of();
+        holder();
+        float[] vector = embeddingService.embed(query);
+        if (vector == null || vector.length == 0) {
+            throw new IllegalStateException("embedding 不可用，无法做向量检索");
+        }
+        var builder = SearchReq.builder()
+                .collectionName(collectionName())
+                .annsField("vector")
+                .metricType(IndexParam.MetricType.valueOf(metricName()))
+                .data(List.of(new FloatVec(vector)))
+                .limit((long) limit)
+                .outputFields(List.of("id", "chunk_id"))
+                .consistencyLevel(ConsistencyLevel.STRONG);
+        if (filter != null && !filter.isBlank()) builder.filter(filter);
+        if (ef != null && ef > 0) builder.searchParams(Map.of("ef", ef));
+        SearchResp resp = clients.client().search(builder.build());
+        List<DenseHit> hits = new ArrayList<>();
+        if (resp.getSearchResults() == null || resp.getSearchResults().isEmpty()) return hits;
+        for (SearchResp.SearchResult result : resp.getSearchResults().get(0)) {
+            Object entity = result.getEntity() == null ? null : result.getEntity().get("chunk_id");
+            String chunkId = entity == null ? null : String.valueOf(entity);
+            if (chunkId == null || chunkId.isBlank()) continue;
+            hits.add(new DenseHit(chunkId, normalizeScore(result.getScore())));
+        }
+        return hits;
+    }
+
+    /** 原生检索失败达到阈值后由检索器调用，本进程内不再尝试。 */
+    public void disableNative(String reason) {
+        if (nativeDisabled) return;
+        nativeDisabled = true;
+        nativeDisabledReason = reason;
+        log.warn("原生稠密检索已禁用，回退框架检索路径：{}", reason);
+    }
+
+    public boolean nativeAvailable() {
+        return !nativeDisabled;
+    }
+
+    private String metricName() {
+        String metric = props.getMilvus().getMetric();
+        return metric == null || metric.isBlank() ? "COSINE" : metric.trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private double normalizeScore(float raw) {
+        if ("L2".equals(metricName())) return 1.0 / (1.0 + Math.max(0f, raw));
+        return Math.max(0.0, Math.min(1.0, raw));
+    }
+
+    public long count() {        try {
             MilvusClientV2 client = clients.client();
             QueryResp resp = client.query(QueryReq.builder()
                     .collectionName(collectionName())

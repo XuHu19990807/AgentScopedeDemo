@@ -1,0 +1,120 @@
+{"id": "network-001", "domain": "network", "question": "华东区光纤专线：扩容后目标带宽是多少？", "file": "network-plan.docx", "keywords": ["4000Mbps"]}
+{"id": "network-002", "domain": "network", "question": "华东区光纤专线：项目总投资多少万元？", "file": "network-plan.docx", "keywords": ["168 万元"]}
+{"id": "network-003", "domain": "network", "question": "华东区光纤专线：汇聚交换机的型号是什么？", "file": "network-plan.docx", "keywords": ["S6730-H48X6C"]}
+{"id": "network-004", "domain": "network", "question": "华东区光纤专线：核心路由器的型号是什么？", "file": "network-plan.docx", "keywords": ["NE8000-X8"]}
+{"id": "network-005", "domain": "network", "question": "华东区光纤专线：光模块一共需要多少个？", "file": "network-plan.docx", "keywords": ["8 个"]}
+{"id": "network-006", "domain": "network", "question": "华东区光纤专线：计划哪一天前完成割接？", "file": "network-plan.docx", "keywords": ["2025-06-30"]}
+{"id": "network-007", "domain": "network", "question": "华东区光纤专线：项目负责人是谁？", "file": "network-plan.docx", "keywords": ["张伟"]}
+{"id": "network-008", "domain": "network", "question": "华东区光纤专线：服务等级目标是多少？", "file": "network-plan.docx", "keywords": ["99.95%"]}
+{"id": "network-009", "domain": "network", "question": "华东区光纤专线：割接窗口是什么时间？", "file": "network-plan.docx", "keywords": ["每周六 00:00-06:00"]}
+{"id": "network-010", "domain": "network", "question": "华东区光纤专线：割接回退时限是多少分钟？", "file": "network-plan.docx", "keywords": ["45 分钟"]}
+{"id": "network-011", "domain": "network", "question": "华东区光纤专线：割接前需要演练几次？", "file": "network-plan.docx", "keywords": ["2 次"]}
+{"id": "network-012", "domain": "network", "question": "华东区光纤专线：覆盖多少并发会话？", "file": "network-plan.docx", "keywords": ["8000 个"]}
+{"id": "network-013", "domain": "network", "question": "华东区光纤专线：扩容前的带宽是多少？", "file": "network-plan.docx", "keywords": ["2000Mbps"]}
+{"id": "network-014", "domain": "network", "question": "华东区光纤专线：汇聚交换机需要多少台？", "file": "network-plan.docx", "keywords": ["12"]}
+{"id": "network-015", "domain": "network", "question": "华东区光纤专线：光模块单价是多少万元？", "file": "network-devices.xlsx", "keywords": ["0.42"]}
+{"id": "network-016", "domain": "network", "question": "华东区光纤专线：设备到货里程碑是哪一天？", "file": "network-devices.xlsx", "keywords": ["2025-04-15"]}
+{"id": "network-017", "domain": "network", "question": "华东区光纤专线：割接完成里程碑是哪一天？", "file": "network-devices.xlsx", "keywords": ["2025-06-10"]}
+{"id": "network-018", "domain": "network", "question": "华东区光纤专线：设备到货的付款比例是多少？", "file": "network-devices.xlsx", "keywords": ["30%"]}
+{"id": "network-019", "domain": "network", "question": "华东区光纤专线：质保期多长？", "file": "network-devices.xlsx", "keywords": ["36 个月"]}
+{"id": "network-020", "domain": "network", "question": "华东区光纤专线：备件包数量是多少？", "file": "network-devices.xlsx", "keywords": ["4"]}
+{"id": "network-021", "domain": "network", "question": "华东区光纤专线：备件包单价是多少万元？", "file": "network-devices.xlsx", "keywords": ["1.2 万元"]}
+{"id": "network-022", "domain": "network", "question": "华东区光纤专线：终验付款比例是多少？", "file": "network-devices.xlsx", "keywords": ["30%"]}
+{"id": "network-023", "domain": "network", "question": "华东区光纤专线：评审结论是什么？", "file": "network-review.pptx", "keywords": ["批准立项"]}
+{"id": "network-024", "domain": "network", "question": "华东区光纤专线：评审日期是哪一天？", "file": "network-review.pptx", "keywords": ["2025-03-20"]}
+{"id": "network-025", "domain": "network", "question": "华东区光纤专线：风险等级是什么？", "file": "network-review.pptx", "keywords": ["中风险"]}
+{"id": "network-026", "domain": "network", "question": "华东区光纤专线：二期预算是多少万元？", "file": "network-review.pptx", "keywords": ["96 万元"]}
+{"id": "network-027", "domain": "network", "question": "华东区光纤专线：评审材料里提到几个遗留问题类别？", "file": "network-review.pptx", "keywords": ["光模块", "演练"]}
+{"id": "network-028", "domain": "network", "question": "华东区光纤专线：平均时延是多少毫秒？", "file": "network-latency.md", "keywords": ["23ms"]}
+{"id": "network-029", "domain": "network", "question": "华东区光纤专线：抖动上限是多少毫秒？", "file": "network-latency.md", "keywords": ["3ms"]}
+{"id": "network-030", "domain": "network", "question": "华东区光纤专线：丢包率上限是多少？", "file": "network-latency.md", "keywords": ["0.01%"]}
+{"id": "network-031", "domain": "network", "question": "华东区光纤专线：链路质量采样周期是多少？", "file": "network-latency.md", "keywords": ["5 分钟"]}
+{"id": "network-032", "domain": "network", "question": "华东区光纤专线：峰值带宽是多少 Mbps？", "file": "network-traffic.csv", "keywords": ["3800"]}
+{"id": "network-033", "domain": "network", "question": "华东区光纤专线：峰值出现在什么时间？", "file": "network-traffic.csv", "keywords": ["2025-05-18 20:15"]}
+{"id": "network-034", "domain": "network", "question": "华东区光纤专线：流量采样数据覆盖几个时间点？", "file": "network-traffic.csv", "keywords": ["13"]}
+{"id": "network-035", "domain": "network", "question": "华东区光纤专线：节点数量是多少？", "file": "network-nodes.json", "keywords": ["6"]}
+{"id": "network-036", "domain": "network", "question": "华东区光纤专线：MTU 配置为多少？", "file": "network-nodes.json", "keywords": ["9000"]}
+{"id": "network-037", "domain": "network", "question": "华东区光纤专线：BGP AS 号是多少？", "file": "network-nodes.json", "keywords": ["64512"]}
+{"id": "network-038", "domain": "network", "question": "华东区光纤专线：核心节点叫什么名字？", "file": "network-nodes.json", "keywords": ["上海-POP-1"]}
+{"id": "network-039", "domain": "network", "question": "华东区光纤专线：首个里程碑的付款比例？", "file": "network-devices.xlsx", "keywords": ["30%"]}
+{"id": "network-040", "domain": "network", "question": "华东区光纤专线：合同里的服务等级条款是多少？", "file": "network-devices.xlsx", "keywords": ["99.95%"]}
+{"id": "ops-001", "domain": "ops", "question": "华南数据中心互联：扩容后目标带宽是多少？", "file": "ops-plan.docx", "keywords": ["1000Mbps"]}
+{"id": "ops-002", "domain": "ops", "question": "华南数据中心互联：项目总投资多少万元？", "file": "ops-plan.docx", "keywords": ["92 万元"]}
+{"id": "ops-003", "domain": "ops", "question": "华南数据中心互联：汇聚交换机的型号是什么？", "file": "ops-plan.docx", "keywords": ["S5735-L48T4X"]}
+{"id": "ops-004", "domain": "ops", "question": "华南数据中心互联：核心路由器的型号是什么？", "file": "ops-plan.docx", "keywords": ["NE40E-M2K"]}
+{"id": "ops-005", "domain": "ops", "question": "华南数据中心互联：光模块一共需要多少个？", "file": "ops-plan.docx", "keywords": ["16 个"]}
+{"id": "ops-006", "domain": "ops", "question": "华南数据中心互联：计划哪一天前完成割接？", "file": "ops-plan.docx", "keywords": ["2025-09-15"]}
+{"id": "ops-007", "domain": "ops", "question": "华南数据中心互联：项目负责人是谁？", "file": "ops-plan.docx", "keywords": ["李静"]}
+{"id": "ops-008", "domain": "ops", "question": "华南数据中心互联：服务等级目标是多少？", "file": "ops-plan.docx", "keywords": ["99.9%"]}
+{"id": "ops-009", "domain": "ops", "question": "华南数据中心互联：割接窗口是什么时间？", "file": "ops-plan.docx", "keywords": ["每周日 01:00-05:00"]}
+{"id": "ops-010", "domain": "ops", "question": "华南数据中心互联：割接回退时限是多少分钟？", "file": "ops-plan.docx", "keywords": ["30 分钟"]}
+{"id": "ops-011", "domain": "ops", "question": "华南数据中心互联：割接前需要演练几次？", "file": "ops-plan.docx", "keywords": ["3 次"]}
+{"id": "ops-012", "domain": "ops", "question": "华南数据中心互联：覆盖多少并发会话？", "file": "ops-plan.docx", "keywords": ["3200 个"]}
+{"id": "ops-013", "domain": "ops", "question": "华南数据中心互联：扩容前的带宽是多少？", "file": "ops-plan.docx", "keywords": ["500Mbps"]}
+{"id": "ops-014", "domain": "ops", "question": "华南数据中心互联：汇聚交换机需要多少台？", "file": "ops-plan.docx", "keywords": ["24"]}
+{"id": "ops-015", "domain": "ops", "question": "华南数据中心互联：光模块单价是多少万元？", "file": "ops-devices.xlsx", "keywords": ["0.18"]}
+{"id": "ops-016", "domain": "ops", "question": "华南数据中心互联：设备到货里程碑是哪一天？", "file": "ops-devices.xlsx", "keywords": ["2025-08-01"]}
+{"id": "ops-017", "domain": "ops", "question": "华南数据中心互联：割接完成里程碑是哪一天？", "file": "ops-devices.xlsx", "keywords": ["2025-09-01"]}
+{"id": "ops-018", "domain": "ops", "question": "华南数据中心互联：设备到货的付款比例是多少？", "file": "ops-devices.xlsx", "keywords": ["40%"]}
+{"id": "ops-019", "domain": "ops", "question": "华南数据中心互联：质保期多长？", "file": "ops-devices.xlsx", "keywords": ["24 个月"]}
+{"id": "ops-020", "domain": "ops", "question": "华南数据中心互联：备件包数量是多少？", "file": "ops-devices.xlsx", "keywords": ["6"]}
+{"id": "ops-021", "domain": "ops", "question": "华南数据中心互联：备件包单价是多少万元？", "file": "ops-devices.xlsx", "keywords": ["1.2 万元"]}
+{"id": "ops-022", "domain": "ops", "question": "华南数据中心互联：终验付款比例是多少？", "file": "ops-devices.xlsx", "keywords": ["30%"]}
+{"id": "ops-023", "domain": "ops", "question": "华南数据中心互联：评审结论是什么？", "file": "ops-review.pptx", "keywords": ["有条件通过"]}
+{"id": "ops-024", "domain": "ops", "question": "华南数据中心互联：评审日期是哪一天？", "file": "ops-review.pptx", "keywords": ["2025-06-28"]}
+{"id": "ops-025", "domain": "ops", "question": "华南数据中心互联：风险等级是什么？", "file": "ops-review.pptx", "keywords": ["低风险"]}
+{"id": "ops-026", "domain": "ops", "question": "华南数据中心互联：二期预算是多少万元？", "file": "ops-review.pptx", "keywords": ["48 万元"]}
+{"id": "ops-027", "domain": "ops", "question": "华南数据中心互联：评审材料里提到几个遗留问题类别？", "file": "ops-review.pptx", "keywords": ["光模块", "演练"]}
+{"id": "ops-028", "domain": "ops", "question": "华南数据中心互联：平均时延是多少毫秒？", "file": "ops-latency.md", "keywords": ["41ms"]}
+{"id": "ops-029", "domain": "ops", "question": "华南数据中心互联：抖动上限是多少毫秒？", "file": "ops-latency.md", "keywords": ["5ms"]}
+{"id": "ops-030", "domain": "ops", "question": "华南数据中心互联：丢包率上限是多少？", "file": "ops-latency.md", "keywords": ["0.05%"]}
+{"id": "ops-031", "domain": "ops", "question": "华南数据中心互联：链路质量采样周期是多少？", "file": "ops-latency.md", "keywords": ["5 分钟"]}
+{"id": "ops-032", "domain": "ops", "question": "华南数据中心互联：峰值带宽是多少 Mbps？", "file": "ops-traffic.csv", "keywords": ["940"]}
+{"id": "ops-033", "domain": "ops", "question": "华南数据中心互联：峰值出现在什么时间？", "file": "ops-traffic.csv", "keywords": ["2025-07-02 21:40"]}
+{"id": "ops-034", "domain": "ops", "question": "华南数据中心互联：流量采样数据覆盖几个时间点？", "file": "ops-traffic.csv", "keywords": ["13"]}
+{"id": "ops-035", "domain": "ops", "question": "华南数据中心互联：节点数量是多少？", "file": "ops-nodes.json", "keywords": ["4"]}
+{"id": "ops-036", "domain": "ops", "question": "华南数据中心互联：MTU 配置为多少？", "file": "ops-nodes.json", "keywords": ["1500"]}
+{"id": "ops-037", "domain": "ops", "question": "华南数据中心互联：BGP AS 号是多少？", "file": "ops-nodes.json", "keywords": ["64513"]}
+{"id": "ops-038", "domain": "ops", "question": "华南数据中心互联：核心节点叫什么名字？", "file": "ops-nodes.json", "keywords": ["广州-POP-1"]}
+{"id": "ops-039", "domain": "ops", "question": "华南数据中心互联：首个里程碑的付款比例？", "file": "ops-devices.xlsx", "keywords": ["40%"]}
+{"id": "ops-040", "domain": "ops", "question": "华南数据中心互联：合同里的服务等级条款是多少？", "file": "ops-devices.xlsx", "keywords": ["99.9%"]}
+{"id": "budget-001", "domain": "budget", "question": "西北节点新建工程：扩容后目标带宽是多少？", "file": "budget-plan.docx", "keywords": ["800Mbps"]}
+{"id": "budget-002", "domain": "budget", "question": "西北节点新建工程：项目总投资多少万元？", "file": "budget-plan.docx", "keywords": ["245 万元"]}
+{"id": "budget-003", "domain": "budget", "question": "西北节点新建工程：汇聚交换机的型号是什么？", "file": "budget-plan.docx", "keywords": ["S6280-48Y6C"]}
+{"id": "budget-004", "domain": "budget", "question": "西北节点新建工程：核心路由器的型号是什么？", "file": "budget-plan.docx", "keywords": ["NE5000E-20"]}
+{"id": "budget-005", "domain": "budget", "question": "西北节点新建工程：光模块一共需要多少个？", "file": "budget-plan.docx", "keywords": ["12 个"]}
+{"id": "budget-006", "domain": "budget", "question": "西北节点新建工程：计划哪一天前完成割接？", "file": "budget-plan.docx", "keywords": ["2026-03-01"]}
+{"id": "budget-007", "domain": "budget", "question": "西北节点新建工程：项目负责人是谁？", "file": "budget-plan.docx", "keywords": ["王磊"]}
+{"id": "budget-008", "domain": "budget", "question": "西北节点新建工程：服务等级目标是多少？", "file": "budget-plan.docx", "keywords": ["99.99%"]}
+{"id": "budget-009", "domain": "budget", "question": "西北节点新建工程：割接窗口是什么时间？", "file": "budget-plan.docx", "keywords": ["每月首个周六 00:00-04:00"]}
+{"id": "budget-010", "domain": "budget", "question": "西北节点新建工程：割接回退时限是多少分钟？", "file": "budget-plan.docx", "keywords": ["60 分钟"]}
+{"id": "budget-011", "domain": "budget", "question": "西北节点新建工程：割接前需要演练几次？", "file": "budget-plan.docx", "keywords": ["1 次"]}
+{"id": "budget-012", "domain": "budget", "question": "西北节点新建工程：覆盖多少并发会话？", "file": "budget-plan.docx", "keywords": ["1500 个"]}
+{"id": "budget-013", "domain": "budget", "question": "西北节点新建工程：扩容前的带宽是多少？", "file": "budget-plan.docx", "keywords": ["200Mbps"]}
+{"id": "budget-014", "domain": "budget", "question": "西北节点新建工程：汇聚交换机需要多少台？", "file": "budget-plan.docx", "keywords": ["18"]}
+{"id": "budget-015", "domain": "budget", "question": "西北节点新建工程：光模块单价是多少万元？", "file": "budget-devices.xlsx", "keywords": ["0.65"]}
+{"id": "budget-016", "domain": "budget", "question": "西北节点新建工程：设备到货里程碑是哪一天？", "file": "budget-devices.xlsx", "keywords": ["2025-12-20"]}
+{"id": "budget-017", "domain": "budget", "question": "西北节点新建工程：割接完成里程碑是哪一天？", "file": "budget-devices.xlsx", "keywords": ["2026-02-10"]}
+{"id": "budget-018", "domain": "budget", "question": "西北节点新建工程：设备到货的付款比例是多少？", "file": "budget-devices.xlsx", "keywords": ["25%"]}
+{"id": "budget-019", "domain": "budget", "question": "西北节点新建工程：质保期多长？", "file": "budget-devices.xlsx", "keywords": ["48 个月"]}
+{"id": "budget-020", "domain": "budget", "question": "西北节点新建工程：备件包数量是多少？", "file": "budget-devices.xlsx", "keywords": ["2"]}
+{"id": "budget-021", "domain": "budget", "question": "西北节点新建工程：备件包单价是多少万元？", "file": "budget-devices.xlsx", "keywords": ["1.2 万元"]}
+{"id": "budget-022", "domain": "budget", "question": "西北节点新建工程：终验付款比例是多少？", "file": "budget-devices.xlsx", "keywords": ["30%"]}
+{"id": "budget-023", "domain": "budget", "question": "西北节点新建工程：评审结论是什么？", "file": "budget-review.pptx", "keywords": ["暂缓批复"]}
+{"id": "budget-024", "domain": "budget", "question": "西北节点新建工程：评审日期是哪一天？", "file": "budget-review.pptx", "keywords": ["2025-11-08"]}
+{"id": "budget-025", "domain": "budget", "question": "西北节点新建工程：风险等级是什么？", "file": "budget-review.pptx", "keywords": ["高风险"]}
+{"id": "budget-026", "domain": "budget", "question": "西北节点新建工程：二期预算是多少万元？", "file": "budget-review.pptx", "keywords": ["130 万元"]}
+{"id": "budget-027", "domain": "budget", "question": "西北节点新建工程：评审材料里提到几个遗留问题类别？", "file": "budget-review.pptx", "keywords": ["光模块", "演练"]}
+{"id": "budget-028", "domain": "budget", "question": "西北节点新建工程：平均时延是多少毫秒？", "file": "budget-latency.md", "keywords": ["67ms"]}
+{"id": "budget-029", "domain": "budget", "question": "西北节点新建工程：抖动上限是多少毫秒？", "file": "budget-latency.md", "keywords": ["8ms"]}
+{"id": "budget-030", "domain": "budget", "question": "西北节点新建工程：丢包率上限是多少？", "file": "budget-latency.md", "keywords": ["0.02%"]}
+{"id": "budget-031", "domain": "budget", "question": "西北节点新建工程：链路质量采样周期是多少？", "file": "budget-latency.md", "keywords": ["5 分钟"]}
+{"id": "budget-032", "domain": "budget", "question": "西北节点新建工程：峰值带宽是多少 Mbps？", "file": "budget-traffic.csv", "keywords": ["760"]}
+{"id": "budget-033", "domain": "budget", "question": "西北节点新建工程：峰值出现在什么时间？", "file": "budget-traffic.csv", "keywords": ["2025-12-11 19:05"]}
+{"id": "budget-034", "domain": "budget", "question": "西北节点新建工程：流量采样数据覆盖几个时间点？", "file": "budget-traffic.csv", "keywords": ["13"]}
+{"id": "budget-035", "domain": "budget", "question": "西北节点新建工程：节点数量是多少？", "file": "budget-nodes.json", "keywords": ["8"]}
+{"id": "budget-036", "domain": "budget", "question": "西北节点新建工程：MTU 配置为多少？", "file": "budget-nodes.json", "keywords": ["9100"]}
+{"id": "budget-037", "domain": "budget", "question": "西北节点新建工程：BGP AS 号是多少？", "file": "budget-nodes.json", "keywords": ["64514"]}
+{"id": "budget-038", "domain": "budget", "question": "西北节点新建工程：核心节点叫什么名字？", "file": "budget-nodes.json", "keywords": ["西安-POP-1"]}
+{"id": "budget-039", "domain": "budget", "question": "西北节点新建工程：首个里程碑的付款比例？", "file": "budget-devices.xlsx", "keywords": ["25%"]}
+{"id": "budget-040", "domain": "budget", "question": "西北节点新建工程：合同里的服务等级条款是多少？", "file": "budget-devices.xlsx", "keywords": ["99.99%"]}

@@ -53,12 +53,13 @@ public class MilvusBm25Store {
     public static final String F_LINE_START = "line_start";
     public static final String F_LINE_END = "line_end";
     public static final String F_CHUNK_INDEX = "chunk_index";
+    public static final String F_DOMAIN = "domain";
     public static final String F_SPARSE = "sparse";
     public static final String FUNCTION_BM25 = "bm25_fn";
 
     private static final List<String> OUT_FIELDS = List.of(
             F_ID, F_DOC_ID, F_CHUNK_ID, FILENAME, F_HEADING, F_CONTENT, F_PARENT,
-            F_LINE_START, F_LINE_END, F_CHUNK_INDEX);
+            F_LINE_START, F_LINE_END, F_CHUNK_INDEX, F_DOMAIN);
 
     private final MilvusClientProvider clients;
     private final RagProperties props;
@@ -96,6 +97,8 @@ public class MilvusBm25Store {
                     .fieldName(F_LINE_END).dataType(DataType.Int32).build());
             schema.addField(AddFieldReq.builder()
                     .fieldName(F_CHUNK_INDEX).dataType(DataType.Int32).build());
+            schema.addField(AddFieldReq.builder()
+                    .fieldName(F_DOMAIN).dataType(DataType.VarChar).maxLength(64).build());
             schema.addField(AddFieldReq.builder()
                     .fieldName(F_PARENT).dataType(DataType.VarChar).maxLength(8192).build());
             // 正文单独开启分词（中文用于 BM25 词法召回；写入时不需要传 sparse，由 Function 生成）
@@ -156,6 +159,7 @@ public class MilvusBm25Store {
             row.addProperty(F_LINE_START, chunk.lineStart());
             row.addProperty(F_LINE_END, chunk.lineEnd());
             row.addProperty(F_CHUNK_INDEX, chunk.chunkIndex());
+            row.addProperty(F_DOMAIN, chunk.effectiveDomain());
             row.addProperty(F_PARENT, nullSafe(chunk.parentText()));
             row.addProperty(F_CONTENT, nullSafe(chunk.content()));
             rows.add(row);
@@ -365,7 +369,14 @@ public class MilvusBm25Store {
                 str(entity.get(F_HEADING)),
                 intOf(entity.get(F_LINE_START)),
                 intOf(entity.get(F_LINE_END)),
-                score);
+                score,
+                str(entity.get(F_DOMAIN)));
+    }
+
+    /** 域过滤表达式；domain 为空时返回 null（不过滤）。 */
+    public static String domainFilter(String domain) {
+        if (domain == null || domain.isBlank()) return null;
+        return F_DOMAIN + " == " + quote(domain.trim());
     }
 
     private static String str(Object value) {

@@ -5,6 +5,7 @@ import com.cetc28.rag.KnowledgeRetriever;
 import com.cetc28.rag.RagProperties;
 import com.cetc28.rag.RagQueryExpander;
 import com.cetc28.rag.RagRerankService;
+import com.cetc28.rag.RagSelector;
 import com.cetc28.rag.RetrievalResult;
 import com.cetc28.rag.RrfUtil;
 import org.slf4j.Logger;
@@ -21,8 +22,11 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Milvus 混合检索：稠密（框架 {@link MilvusRagStore}）+ BM25（{@link MilvusBm25Store}）双路召回，
- * 加权 RRF 融合，可选 rerank 与查询扩展。
+ * Milvus 混合检索：稠密（框架 {@link MilvusRagStore}，可切换原生 HNSW）+ BM25（{@link MilvusBm25Store}）双路召回，
+ * 加权 RRF 融合，可选查询扩展、批量精排与多样性选择。
+ *
+ * <p>大库场景下的精度控制点：两路各取独立候选数（200/300），相似度阈值默认后置到精排之后，
+ * 精排后再用 {@link RagSelector} 做去重与同文档/同章节配额，最后截断到 topK。
  */
 @Component
 @Primary
@@ -35,82 +39,137 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
     private final RagProperties props;
     private final RagRerankService rerankService;
     private final RagQueryExpander queryExpander;
+    private final RagSelector selector;
 
     public MilvusHybridRetriever(MilvusRagStore denseStore,
                                  MilvusBm25Store bm25Store,
                                  RagProperties props,
                                  RagRerankService rerankService,
-                                 RagQueryExpander queryExpander) {
+                                 RagQueryExpander queryExpander,
+                                 RagSelector selector) {
         this.denseStore = denseStore;
         this.bm25Store = bm25Store;
         this.props = props;
         this.rerankService = rerankService;
         this.queryExpander = queryExpander;
+        this.selector = selector;
     }
 
     @Override
     public RetrievalResult retrieve(String query) {
-        return retrieve(query, Mode.HYBRID, -1, null);
+        return retrieve(query, Mode.HYBRID, -1, null, null);
     }
 
     @Override
     public RetrievalResult retrieve(String query, Mode mode) {
-        return retrieve(query, mode, -1, null);
+        return retrieve(query, mode, -1, null, null);
     }
 
     @Override
     public RetrievalResult retrieve(String query, Mode mode, int topK, Double minScore) {
+        return retrieve(query, mode, topK, minScore, null);
+    }
+
+    @Override
+    public RetrievalResult retrieve(String query, Mode mode, int topK, Double minScore, String domain) {
+        PipelineResult result = run(query, mode, topK, minScore, domain, false);
+        if (result.emptyReason() != null) {
+            return RetrievalResult.empty(query, result.emptyReason());
+        }
+        List<RetrievalResult.Hit> hits = new ArrayList<>(result.selected().size());
+        for (ChunkView view : result.selected()) {
+            hits.add(new RetrievalResult.Hit(
+                    view.chunkId(),
+                    view.text(),
+                    view.filename(),
+                    view.headingPath(),
+                    view.lineStart(),
+                    view.lineEnd(),
+                    view.score(),
+                    matchedBy(result.mode(), result.denseScores(), result.bm25Scores(), view.chunkId())));
+        }
+        boolean degraded = !result.degraded().isEmpty();
+        return new RetrievalResult(query, hits, degraded,
+                degraded ? String.join("；", result.degraded()) : null,
+                result.tookMs(), result.bm25Scores().size(), result.denseScores().size());
+    }
+
+    @Override
+    public Diagnosis diagnose(String query, Mode mode, Integer topK, String domain) {
+        PipelineResult result = run(query, mode, topK == null ? -1 : topK, null, domain, true);
+        return new Diagnosis(query, result.mode().name(), result.domain(), result.tookMs(),
+                result.denseViews(), result.bm25Views(), result.fused(), result.reranked(),
+                result.selected(), result.degraded());
+    }
+
+    @Override
+    public ChunkView readChunk(String chunkId) {
+        return bm25Store.getById(chunkId);
+    }
+
+    private PipelineResult run(String query, Mode mode, int topK, Double minScore, String domain, boolean diagnostics) {
         long started = System.currentTimeMillis();
         String normalized = RrfUtil.normalize(query);
-        if (normalized.isBlank()) return RetrievalResult.empty(query, "空查询");
         Mode effective = mode == null ? Mode.HYBRID : mode;
-        int limit = topK > 0 ? topK : Math.max(1, props.getRetrieve().getTopK());
-        int candidateLimit = Math.max(limit, props.getRetrieve().getCandidateLimit());
-        double floor = minScore != null ? minScore : props.getRetrieve().getMinScore();
+        String domainKey = domain == null || domain.isBlank() ? null : domain.trim();
+        if (normalized.isBlank()) {
+            return PipelineResult.empty(query, effective, domainKey, "空查询", started);
+        }
+        RagProperties.Retrieve cfg = props.getRetrieve();
+        int limit = topK > 0 ? topK : Math.max(1, cfg.getTopK());
+        int denseLimit = Math.max(limit, Math.max(1, cfg.getDenseCandidateLimit()));
+        int bm25Limit = Math.max(limit, Math.max(1, cfg.getBm25CandidateLimit()));
+        double floor = minScore != null ? minScore : cfg.getMinScore();
+        double minSimilarity = cfg.getMinVectorSimilarity();
+        boolean preSimilarity = "pre".equalsIgnoreCase(cfg.getSimilarityFilter());
 
+        List<String> degraded = new ArrayList<>();
         List<String> denseKeys = new ArrayList<>();
         Map<String, Double> denseScores = new LinkedHashMap<>();
-        String denseError = null;
         if (effective != Mode.BM25) {
             try {
-                Double threshold = props.getRetrieve().getMinVectorSimilarity();
-                for (MilvusRagStore.DenseHit hit : denseStore.searchDense(normalized, candidateLimit, threshold)) {
+                for (MilvusRagStore.DenseHit hit : denseHits(normalized, denseLimit, domainKey,
+                        preSimilarity ? minSimilarity : null)) {
                     denseKeys.add(hit.chunkId());
                     denseScores.put(hit.chunkId(), hit.score());
                 }
             } catch (Exception e) {
-                denseError = e.getMessage();
+                degraded.add("向量检索降级：" + e.getMessage());
                 log.warn("稠密检索失败：{}", e.getMessage());
             }
         }
 
-        List<String> bm25Keys = new ArrayList<>();
-        Map<String, Double> bm25Scores = new LinkedHashMap<>();
-        String bm25Error = null;
+        List<ChunkView> bm25Views = new ArrayList<>();
         if (effective != Mode.VECTOR) {
             try {
-                for (ChunkView hit : bm25Store.search(normalized, candidateLimit)) {
-                    bm25Keys.add(hit.chunkId());
-                    bm25Scores.put(hit.chunkId(), hit.score());
-                }
+                bm25Views = bm25Store.search(normalized, bm25Limit, MilvusBm25Store.domainFilter(domainKey));
             } catch (Exception e) {
-                bm25Error = e.getMessage();
+                degraded.add("BM25 检索降级：" + e.getMessage());
                 log.warn("BM25 检索失败：{}", e.getMessage());
             }
         }
+        List<String> bm25Keys = new ArrayList<>(bm25Views.size());
+        Map<String, Double> bm25Scores = new LinkedHashMap<>();
+        for (ChunkView view : bm25Views) {
+            bm25Keys.add(view.chunkId());
+            bm25Scores.put(view.chunkId(), view.score());
+        }
 
         if (denseKeys.isEmpty() && bm25Keys.isEmpty()) {
-            String reason = describeFailure(effective, denseError, bm25Error);
-            return RetrievalResult.empty(query, reason);
+            String reason = describeFailure(effective, degraded);
+            return PipelineResult.empty(query, effective, domainKey, reason, started);
         }
 
         // 低分时用改写查询补 BM25 召回（成本低、只增不减）
+        String bm25Filter = MilvusBm25Store.domainFilter(domainKey);
         if (effective == Mode.HYBRID && props.getQueryExpansion().isEnabled() && belowTrigger(denseScores, bm25Scores)) {
             for (String expanded : queryExpander.expand(normalized)) {
                 try {
-                    for (ChunkView hit : bm25Store.search(expanded, candidateLimit)) {
+                    for (ChunkView hit : bm25Store.search(expanded, bm25Limit, bm25Filter)) {
+                        if (bm25Scores.containsKey(hit.chunkId())) continue;
                         bm25Keys.add(hit.chunkId());
                         bm25Scores.put(hit.chunkId(), hit.score());
+                        bm25Views.add(hit);
                     }
                 } catch (Exception e) {
                     log.debug("扩展查询检索失败（忽略）：{}", e.getMessage());
@@ -120,67 +179,88 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         }
 
         Map<String, Double> fused = fuse(effective, denseKeys, bm25Keys);
-        Set<String> ordered = new LinkedHashSet<>(RrfUtil.orderByScore(fused));
-        List<ChunkView> views = bm25Store.getByIds(new ArrayList<>(ordered));
+        List<String> ordered = new ArrayList<>(new LinkedHashSet<>(RrfUtil.orderByScore(fused)));
+        List<ChunkView> views = bm25Store.getByIds(ordered);
         if (views.isEmpty()) {
-            return RetrievalResult.empty(query, "命中索引但元数据缺失（BM25 集合不可用？）");
+            return PipelineResult.empty(query, effective, domainKey, "命中索引但元数据缺失（BM25 集合不可用？）", started);
         }
         Map<String, ChunkView> viewById = new LinkedHashMap<>();
         for (ChunkView view : views) viewById.put(view.chunkId(), view);
 
-        List<ChunkView> candidates = new ArrayList<>(ordered.size());
+        List<ChunkView> fusedViews = new ArrayList<>(ordered.size());
         for (String key : ordered) {
             ChunkView view = viewById.get(key);
             if (view == null) continue;
-            candidates.add(withScore(view, fused.getOrDefault(key, 0.0)));
+            fusedViews.add(withScore(view, fused.getOrDefault(key, 0.0)));
         }
-        candidates.sort(Comparator.comparingDouble(ChunkView::score).reversed());
+        fusedViews.sort(Comparator.comparingDouble(ChunkView::score).reversed());
 
-        boolean degraded = false;
-        String degradedReason = null;
-        if (effective == Mode.HYBRID && denseError != null) {
-            degraded = true;
-            degradedReason = "向量检索降级：" + denseError;
-        } else if (effective == Mode.HYBRID && bm25Error != null) {
-            degraded = true;
-            degradedReason = "BM25 检索降级：" + bm25Error;
-        } else if (effective == Mode.VECTOR && denseError != null) {
-            degraded = true;
-            degradedReason = "向量检索不可用：" + denseError;
-        } else if (effective == Mode.BM25 && bm25Error != null) {
-            degraded = true;
-            degradedReason = "BM25 检索不可用：" + bm25Error;
+        // 域兜底过滤（BM25 用 expr、原生稠密用 payload expr；框架稠密路径只能事后过滤）
+        List<ChunkView> floored = new ArrayList<>(fusedViews.size());
+        for (ChunkView view : fusedViews) {
+            if (domainKey != null && !domainKey.equals(view.effectiveDomain())) continue;
+            if (floor > 0 && view.score() < floor) continue;
+            floored.add(view);
         }
 
-        List<ChunkView> filtered = applyFilters(candidates, floor);
-        boolean timedOut = System.currentTimeMillis() - started > Math.max(200, props.getRetrieve().getTimeoutMs());
-        if (props.getRerank().isEnabled() && !timedOut && filtered.size() > 1) {
+        boolean timedOut = System.currentTimeMillis() - started > Math.max(200, cfg.getTimeoutMs());
+        List<ChunkView> reranked = floored;
+        if (props.getRerank().isEnabled() && !timedOut && floored.size() > 1) {
             RagRerankService.RerankResult result = rerankService.rerank(
-                    normalized, filtered, Math.max(limit, props.getRerank().getTopN()));
+                    normalized, floored, Math.max(limit, props.getRerank().getTopN()));
             if (result.applied()) {
-                filtered = result.chunks();
+                reranked = result.chunks();
             } else if (result.reason() != null) {
-                degraded = true;
-                degradedReason = degradedReason == null ? result.reason() : degradedReason + "；" + result.reason();
+                degraded.add(result.reason());
             }
         }
-        List<ChunkView> finalViews = filtered.size() > limit ? new ArrayList<>(filtered.subList(0, limit)) : filtered;
 
-        List<RetrievalResult.Hit> hits = new ArrayList<>(finalViews.size());
-        for (ChunkView view : finalViews) {
-            hits.add(new RetrievalResult.Hit(
-                    view.chunkId(),
-                    view.text(),
-                    view.filename(),
-                    view.headingPath(),
-                    view.lineStart(),
-                    view.lineEnd(),
-                    view.score(),
-                    matchedBy(effective, denseScores, bm25Scores, view.chunkId())));
+        List<ChunkView> afterSimilarity = reranked;
+        if (!preSimilarity && minSimilarity > 0 && !denseScores.isEmpty()) {
+            afterSimilarity = new ArrayList<>(reranked.size());
+            for (ChunkView view : reranked) {
+                Double denseScore = denseScores.get(view.chunkId());
+                if (denseScore != null && denseScore < minSimilarity) continue;
+                afterSimilarity.add(view);
+            }
         }
-        long took = System.currentTimeMillis() - started;
-        return new RetrievalResult(query, hits, degraded, degradedReason, took,
-                bm25Scores.size(), denseScores.size());
+
+        List<ChunkView> selected = selector.select(afterSimilarity, limit, props);
+
+        List<ChunkView> denseViews = diagnostics ? denseViews(denseKeys, denseScores) : List.of();
+        return new PipelineResult(query, effective, domainKey, denseViews, bm25Views, fusedViews,
+                reranked, selected, degraded, System.currentTimeMillis() - started,
+                denseScores, bm25Scores, null);
+    }
+
+    private List<MilvusRagStore.DenseHit> denseHits(String query, int limit, String domain, Double threshold) {
+        String denseMode = props.getMilvus().getDenseMode();
+        boolean nativeAllowed = denseMode != null && !"framework".equalsIgnoreCase(denseMode)
+                && denseStore.nativeAvailable();
+        if (nativeAllowed) {
+            try {
+                String filter = domain == null ? null
+                        : "payload[\"" + MilvusRagStore.PAYLOAD_DOMAIN + "\"] == " + MilvusBm25Store.quote(domain);
+                return denseStore.searchNative(query, limit, filter,
+                        props.getMilvus().getIndex().getEfSearch());
+            } catch (Exception e) {
+                denseStore.disableNative(e.getMessage());
+            }
+        }
+        return denseStore.searchDense(query, limit, threshold);
+    }
+
+    private List<ChunkView> denseViews(List<String> denseKeys, Map<String, Double> denseScores) {
+        if (denseKeys.isEmpty()) return List.of();
+        List<ChunkView> views = bm25Store.getByIds(denseKeys);
+        Map<String, ChunkView> byId = new LinkedHashMap<>();
+        for (ChunkView view : views) byId.put(view.chunkId(), view);
+        List<ChunkView> result = new ArrayList<>(denseKeys.size());
+        for (String key : denseKeys) {
+            ChunkView view = byId.get(key);
+            if (view != null) result.add(withScore(view, denseScores.getOrDefault(key, 0.0)));
+        }
+        return result;
     }
 
     private Map<String, Double> fuse(Mode mode, List<String> denseKeys, List<String> bm25Keys) {
@@ -210,24 +290,10 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         return best < props.getQueryExpansion().getTriggerScore();
     }
 
-    private List<ChunkView> applyFilters(List<ChunkView> candidates, double floor) {
-        List<ChunkView> filtered = new ArrayList<>(candidates.size());
-        Map<String, Integer> perDoc = new LinkedHashMap<>();
-        int maxPerDoc = Math.max(1, props.getRetrieve().getMaxPerDoc());
-        for (ChunkView view : candidates) {
-            if (floor > 0 && view.score() < floor) continue;
-            String doc = view.filename() == null ? "" : view.filename();
-            int used = perDoc.getOrDefault(doc, 0);
-            if (used >= maxPerDoc) continue;
-            perDoc.put(doc, used + 1);
-            filtered.add(view);
-        }
-        return filtered;
-    }
-
     private static ChunkView withScore(ChunkView view, double score) {
         return new ChunkView(view.chunkId(), view.docId(), view.chunkIndex(), view.content(),
-                view.parentText(), view.filename(), view.headingPath(), view.lineStart(), view.lineEnd(), score);
+                view.parentText(), view.filename(), view.headingPath(), view.lineStart(), view.lineEnd(),
+                score, view.domain());
     }
 
     private static String matchedBy(Mode mode, Map<String, Double> dense, Map<String, Double> bm25, String chunkId) {
@@ -239,15 +305,32 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         return mode == Mode.VECTOR ? "vector" : "bm25";
     }
 
-    private static String describeFailure(Mode mode, String denseError, String bm25Error) {
-        if (mode == Mode.VECTOR) return denseError != null ? denseError : "无向量命中";
-        if (mode == Mode.BM25) return bm25Error != null ? bm25Error : "无词法命中";
-        if (denseError != null && bm25Error != null) return "向量与词法检索均不可用：" + denseError + "；" + bm25Error;
+    private static String describeFailure(Mode mode, List<String> degraded) {
+        if (!degraded.isEmpty()) return String.join("；", degraded);
+        if (mode == Mode.VECTOR) return "无向量命中";
+        if (mode == Mode.BM25) return "无词法命中";
         return "知识库为空或无匹配内容";
     }
 
-    @Override
-    public ChunkView readChunk(String chunkId) {
-        return bm25Store.getById(chunkId);
+    private record PipelineResult(
+            String query,
+            Mode mode,
+            String domain,
+            List<ChunkView> denseViews,
+            List<ChunkView> bm25Views,
+            List<ChunkView> fused,
+            List<ChunkView> reranked,
+            List<ChunkView> selected,
+            List<String> degraded,
+            long tookMs,
+            Map<String, Double> denseScores,
+            Map<String, Double> bm25Scores,
+            String emptyReason) {
+
+        static PipelineResult empty(String query, Mode mode, String domain, String reason, long started) {
+            return new PipelineResult(query, mode, domain, List.of(), List.of(), List.of(), List.of(),
+                    List.of(), reason == null ? List.of() : List.of(reason),
+                    System.currentTimeMillis() - started, Map.of(), Map.of(), reason);
+        }
     }
 }

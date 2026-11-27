@@ -84,6 +84,11 @@ public class EmbeddingService {
         return new Effective("default", baseUrl, apiKey, model, maxTokens, configuredDimension);
     }
 
+    /** 当前生效的 embedding token 上限（供切块预算自检）。 */
+    public int maxTokens() {
+        return effective().maxTokens();
+    }
+
     /**
      * 是否可用：只看 base-url 与 model。
      *

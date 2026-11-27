@@ -116,6 +116,10 @@ rag:
     overlap-chars: ${RAG_CHUNK_OVERLAP_CHARS:48}
     # 单文件最大块数（防超大文件打爆向量库）
     max-chunks-per-file: ${RAG_CHUNK_MAX_PER_FILE:5000}
+    # 单块硬上限（字符）：以 max(target-chars, max-chars) 打包，宁可块略大也不切段落/表格行；
+    # 只有单个语义块本身超过该值时才切分。400 与 embedding max-tokens=512（中文 1 token/字符、
+    # 预留文件名+标题前缀）匹配，不能超过 452。
+    max-chars: ${RAG_CHUNK_MAX_CHARS:400}
     # 父块（命中子块后注入模型的小节上下文）最大字符数
     parent-max-chars: ${RAG_CHUNK_PARENT_MAX_CHARS:1200}
     # 估算 token 上限：超过先切小再嵌入，不再依赖 EmbeddingService 静默截断
@@ -131,8 +135,12 @@ rag:
     retries: ${RAG_EMBED_RETRIES:2}
   retrieve:
     # 最终注入模型的片段数
-    top-k: ${RAG_TOP_K:6}
-    # 单路召回候选数（稠密与 BM25 各取这么多，再融合）
+    top-k: ${RAG_TOP_K:8}
+    # 稠密路候选数：大候选集交给精排收敛（千万级分段时只靠 top-k 直接截断必然掉召回）
+    dense-candidate-limit: ${RAG_DENSE_CANDIDATE_LIMIT:200}
+    # BM25 路候选数
+    bm25-candidate-limit: ${RAG_BM25_CANDIDATE_LIMIT:300}
+    # 兜底：以上两路未配置（<=0）时使用
     candidate-limit: ${RAG_CANDIDATE_LIMIT:40}
     # RRF 融合常数：score = Σ weight/(k + rank)
     rrf-k: ${RAG_RRF_K:60}
@@ -141,13 +149,19 @@ rag:
     # BM25 路权重（专有名词/编号/表格关键词靠它兜底）
     bm25-weight: ${RAG_BM25_WEIGHT:0.8}
     # 同一文档最多贡献几条，避免一个文件霸屏
-    max-per-doc: ${RAG_MAX_PER_DOC:4}
+    max-per-doc: ${RAG_MAX_PER_DOC:3}
+    # 同一标题路径最多贡献几条（注入内容多样性）
+    max-per-heading: ${RAG_MAX_PER_HEADING:2}
+    # 按正文哈希去重（重复段落只留第一条）
+    dedupe: ${RAG_DEDUPE:true}
     # 单次检索总超时（毫秒）：超时降级为已拿到的部分结果
     timeout-ms: ${RAG_RETRIEVE_TIMEOUT_MS:2500}
     # 融合分数下限（0 = 不过滤）
     min-score: ${RAG_MIN_SCORE:0.0}
-    # 向量路余弦相似度下限：低于该值的块视为不相关，不进入候选
-    min-vector-similarity: ${RAG_MIN_VECTOR_SIMILARITY:0.2}
+    # 向量相似度下限
+    min-vector-similarity: ${RAG_MIN_VECTOR_SIMILARITY:0.15}
+    # 相似度过滤时机：pre=检索时过滤；post=精排后再过滤（推荐，避免提前踢掉语义相近的正确块）
+    similarity-filter: ${RAG_SIMILARITY_FILTER:post}
   inject:
     # 是否把检索结果自动注入对话上下文
     enabled: ${RAG_INJECT_ENABLED:true}
@@ -165,13 +179,17 @@ rag:
     enabled: ${RAG_AGENTIC_ENABLED:true}
   # 精排：DashScope 兼容 text-rerank，对 RRF 候选重排；接口不可达自动退回 RRF 顺序
   rerank:
-    enabled: ${RAG_RERANK_ENABLED:false}
+    enabled: ${RAG_RERANK_ENABLED:true}
     base-url: ${RAG_RERANK_BASE_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
     api-key: ${RAG_RERANK_API_KEY:}
     model: ${RAG_RERANK_MODEL:gte-rerank-v2}
-    # 送去精排的候选条数
-    top-n: ${RAG_RERANK_TOP_N:20}
-    timeout-ms: ${RAG_RERANK_TIMEOUT_MS:1500}
+    # 精排后保留的候选条数
+    top-n: ${RAG_RERANK_TOP_N:100}
+    # 送去精排的候选上限（精排最贵，需要封顶）
+    max-candidates: ${RAG_RERANK_MAX_CANDIDATES:200}
+    # 单次精排请求的文档条数（DashScope 单请求有上限）
+    batch-size: ${RAG_RERANK_BATCH_SIZE:50}
+    timeout-ms: ${RAG_RERANK_TIMEOUT_MS:3000}
   # 查询扩展：口语化问题召回不足时，让模型改写查询，只补 BM25 召回
   query-expansion:
     enabled: ${RAG_QUERY_EXPANSION_ENABLED:false}
@@ -186,8 +204,8 @@ rag:
     token: ${MILVUS_TOKEN:}
     username: ${MILVUS_USERNAME:}
     password: ${MILVUS_PASSWORD:}
-    # 集合版本：换 embedding 模型/维度时改这里（旧集合保留可回退）
-    collection-version: ${MILVUS_COLLECTION_VERSION:v1}
+    # 集合版本：换 embedding 模型/维度/索引参数时改这里（旧集合保留可回退）
+    collection-version: ${MILVUS_COLLECTION_VERSION:v3}
     dense-collection: ${MILVUS_DENSE_COLLECTION:rag_dense}
     bm25-collection: ${MILVUS_BM25_COLLECTION:rag_bm25}
     metric: ${MILVUS_METRIC:COSINE}
@@ -196,6 +214,14 @@ rag:
     analyzer: ${MILVUS_ANALYZER:chinese}
     # 启动后即建集合/校验；Milvus 不可用时只告警，不阻塞应用启动
     ensure-on-startup: ${MILVUS_ENSURE_ON_STARTUP:true}
+    # 稠密检索实现：auto=原生优先失败回落框架；native=只走原生；framework=只走框架
+    dense-mode: ${MILVUS_DENSE_MODE:auto}
+    # 稠密向量索引参数（HNSW 召回/延迟/内存三者的折中：M=32、efConstruction=200、ef=128）
+    index:
+      type: ${MILVUS_INDEX_TYPE:HNSW}
+      m: ${MILVUS_INDEX_M:32}
+      ef-construction: ${MILVUS_INDEX_EF_CONSTRUCTION:200}
+      ef-search: ${MILVUS_INDEX_EF_SEARCH:128}
   # 原文留存：上传成功后把原始字节写到该目录，供"重新解析"和原文预览使用
   storage:
     dir: ${RAG_STORAGE_DIR:data/knowledge}
@@ -228,6 +254,10 @@ chat:
     max-extract-chars: 2000000
     max-pdf-pages: 300
     max-excel-rows: 5000
+    # 单个 Excel/Word 单元格最长字符数（防止一格撑爆 Markdown 行、切块后被反复切开）
+    max-excel-cell-chars: ${CHAT_FILES_MAX_CELL_CHARS:1000}
+    # 现有解析器失败时是否回退到 AgentScope TikaReader 取纯文本
+    tika-fallback: ${CHAT_FILES_TIKA_FALLBACK:true}
     ttl-days: ${CHAT_FILES_TTL_DAYS:7}
     extract-timeout-seconds: 30
     cleanup-cron: "0 30 3 * * *"

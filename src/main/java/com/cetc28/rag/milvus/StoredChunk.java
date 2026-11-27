@@ -16,7 +16,21 @@ public record StoredChunk(
         String headingPath,
         int lineStart,
         int lineEnd,
-        String contentHash) {
+        String contentHash,
+        String domain) {
+
+    public static final String DEFAULT_DOMAIN = "default";
+
+    /** 兼容旧构造：域缺省为 default。 */
+    public StoredChunk(String chunkId, String docId, int chunkIndex, String content, String parentText,
+                       String filename, String headingPath, int lineStart, int lineEnd, String contentHash) {
+        this(chunkId, docId, chunkIndex, content, parentText, filename, headingPath, lineStart, lineEnd,
+                contentHash, DEFAULT_DOMAIN);
+    }
+
+    public String effectiveDomain() {
+        return domain == null || domain.isBlank() ? DEFAULT_DOMAIN : domain;
+    }
 
     public String embeddingText() {
         StringBuilder sb = new StringBuilder();
