@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 · AgentChat</title>
+  <script>
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem('agentchat.theme') || 'light';
+    } catch (_) { /* 忽略隐私模式限制 */ }
+  </script>
+  <link rel="stylesheet" href="/css/login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-card">
+      <div class="login-brand">
+        <div class="login-logo">A</div>
+        <div>
+          <h1>AgentChat</h1>
+          <p>智能体协同平台</p>
+        </div>
+      </div>
+
+      <div id="loginNotice" class="login-notice" hidden></div>
+
+      <form id="loginForm" class="login-form" autocomplete="on">
+        <label>
+          <span>账号</span>
+          <input id="loginName" name="username" type="text" placeholder="用户名 / 大系统账号" autocomplete="username" required>
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="loginPassword" name="password" type="password" placeholder="登录密码" autocomplete="current-password" required>
+        </label>
+        <button id="loginSubmit" class="login-submit" type="submit">登录</button>
+        <div id="loginError" class="login-error" hidden></div>
+      </form>
+
+      <div class="login-foot">
+        <a id="backLink" href="/">返回对话</a>
+        <span id="ssoHint" hidden>支持大系统单点登录：由大系统携带 sso 令牌跳转即可免登录。</span>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/js/login.js"></script>
+</body>
+</html>

@@ -314,6 +314,81 @@ button { cursor: pointer; }
 }
 .health-badge.warn { background: var(--danger-soft); color: var(--danger); }
 
+/* ===== 当前用户 ===== */
+.user-chip { position: relative; flex-shrink: 0; }
+.user-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  max-width: 180px;
+}
+.user-btn:hover { background: var(--bg-soft); color: var(--text); }
+.user-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft, var(--bg-soft));
+  color: var(--accent, var(--text));
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.user-chip.admin .user-avatar { background: var(--ok-soft); color: var(--ok); }
+.user-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.user-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 60;
+  min-width: 208px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev, var(--bg));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* display:flex 会覆盖 hidden 属性的默认样式，必须显式声明 */
+.user-menu[hidden] {
+  display: none;
+}
+.user-menu .user-meta {
+  padding: 6px 8px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+  word-break: break-all;
+}
+.user-menu button {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+.user-menu button:hover { background: var(--bg-soft); }
+.user-menu button.danger { color: var(--danger); }
+
 /* ===== Messages ===== */
 .messages {
   flex: 1;

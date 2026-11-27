@@ -1,5 +1,6 @@
 package com.cetc28.controller;
 
+import com.cetc28.identity.KnowledgeScopeService;
 import com.cetc28.rag.KnowledgeBaseService;
 import com.cetc28.rag.KnowledgeEditService;
 import com.cetc28.rag.KnowledgeRetriever;
@@ -10,6 +11,8 @@ import com.cetc28.rag.RetrievalResult;
 import com.cetc28.rag.milvus.MilvusRagStore;
 import com.cetc28.service.DocumentTextExtractor;
 import com.cetc28.service.EmbeddingService;
+import com.cetc28.chat.UserContext;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -17,8 +20,10 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/knowledge")
@@ -48,26 +53,39 @@ public class KnowledgeController {
     @Autowired
     private EmbeddingService embeddingService;
 
+    @Autowired
+    private KnowledgeScopeService knowledgeScopeService;
+
     @PostMapping("/upload")
     public Map<String, Object> uploadFile(@RequestParam("file") MultipartFile file,
-                                          @RequestParam(required = false) String domain) {
+                                          @RequestParam(required = false) String domain,
+                                          HttpServletRequest http) {
+        String target = KnowledgeBaseService.normalizeDomain(domain);
+        KnowledgeScopeService.Scope scope = knowledgeScopeService.scopeFor(UserContext.from(http));
+        if (!scope.admin() && !scope.domains().contains(target)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "无权向知识域「" + target + "」上传文档");
+        }
         KnowledgeBaseService.UploadResult result = knowledgeBaseService.uploadFile(file, null, null, domain);
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("success", result.success());
         resp.put("message", result.message());
         resp.put("chunkCount", result.chunkCount());
-        resp.put("domain", KnowledgeBaseService.normalizeDomain(domain));
+        resp.put("domain", target);
         return resp;
     }
 
     @GetMapping("/files")
-    public List<KnowledgeBaseService.FileMeta> listFiles(@RequestParam(required = false) String domain) {
+    public List<KnowledgeBaseService.FileMeta> listFiles(@RequestParam(required = false) String domain,
+                                                         HttpServletRequest http) {
         List<KnowledgeBaseService.FileMeta> files = knowledgeBaseService.listUploadedFiles();
-        if (domain == null || domain.isBlank()) return files;
-        String key = KnowledgeBaseService.normalizeDomain(domain);
+        KnowledgeScopeService.Scope scope = knowledgeScopeService.scopeFor(UserContext.from(http));
+        String key = domain == null || domain.isBlank() ? null : KnowledgeBaseService.normalizeDomain(domain);
         List<KnowledgeBaseService.FileMeta> filtered = new ArrayList<>(files.size());
         for (KnowledgeBaseService.FileMeta meta : files) {
-            if (key.equals(meta.effectiveDomain())) filtered.add(meta);
+            if (key != null && !key.equals(meta.effectiveDomain())) continue;
+            if (!scope.admin() && !scope.domains().contains(meta.effectiveDomain())) continue;
+            filtered.add(meta);
         }
         return filtered;
     }
@@ -96,9 +114,12 @@ public class KnowledgeController {
                                       @RequestParam(defaultValue = "6") int topK,
                                       @RequestParam(defaultValue = "hybrid") String mode,
                                       @RequestParam(required = false) Double minScore,
-                                      @RequestParam(required = false) String domain) {
+                                      @RequestParam(required = false) String domain,
+                                      HttpServletRequest http) {
         KnowledgeRetriever.Mode parsed = parseMode(mode);
-        RetrievalResult result = retriever.retrieve(q, parsed, topK, minScore, domain);
+        KnowledgeScopeService.Scope scope = knowledgeScopeService.scopeFor(UserContext.from(http));
+        Set<String> domains = resolveDomains(scope, domain);
+        RetrievalResult result = retriever.retrieveInDomains(q, parsed, topK, minScore, domains);
 
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("query", q);
@@ -136,9 +157,12 @@ public class KnowledgeController {
     public Map<String, Object> diagnostics(@RequestParam String q,
                                            @RequestParam(defaultValue = "hybrid") String mode,
                                            @RequestParam(required = false) Integer topK,
-                                           @RequestParam(required = false) String domain) {
+                                           @RequestParam(required = false) String domain,
+                                           HttpServletRequest http) {
         KnowledgeRetriever.Mode parsed = parseMode(mode);
-        KnowledgeRetriever.Diagnosis diagnosis = retriever.diagnose(q, parsed, topK, domain);
+        KnowledgeScopeService.Scope scope = knowledgeScopeService.scopeFor(UserContext.from(http));
+        Set<String> domains = resolveDomains(scope, domain);
+        KnowledgeRetriever.Diagnosis diagnosis = retriever.diagnoseInDomains(q, parsed, topK, domains);
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("query", q);
         resp.put("mode", parsed.name().toLowerCase());
@@ -166,6 +190,25 @@ public class KnowledgeController {
         };
     }
 
+    /**
+     * 解析检索域集合：null 表示不限（管理员），空集表示无授权，非空表示过滤。
+     * 非管理员显式指定了授权范围外的域时直接 403，避免"猜域"探测。
+     */
+    private static Set<String> resolveDomains(KnowledgeScopeService.Scope scope, String domain) {
+        String requested = domain == null || domain.isBlank() ? null : KnowledgeBaseService.normalizeDomain(domain);
+        if (scope.admin()) {
+            return requested == null ? null : Set.of(requested);
+        }
+        if (requested == null) {
+            return scope.domains();
+        }
+        if (!scope.domains().contains(requested)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "无权访问知识域「" + requested + "」");
+        }
+        return Set.of(requested);
+    }
+
     private static List<Map<String, Object>> brief(List<com.cetc28.rag.ChunkView> views) {
         List<Map<String, Object>> brief = new ArrayList<>();
         if (views == null) return brief;
@@ -189,8 +232,9 @@ public class KnowledgeController {
     /** 语义检索（保留旧路径，内部走混合检索的向量路，返回结构与 /search 一致） */
     @GetMapping("/semantic")
     public Map<String, Object> semanticSearch(@RequestParam String q,
-                                              @RequestParam(defaultValue = "5") int topK) {
-        return search(q, topK, "vector", null, null);
+                                              @RequestParam(defaultValue = "5") int topK,
+                                              HttpServletRequest http) {
+        return search(q, topK, "vector", null, null, http);
     }
 
     /**

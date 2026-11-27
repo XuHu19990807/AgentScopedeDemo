@@ -1,13 +1,20 @@
 // SSE 客户端：支持 CRLF、多行 data、注释心跳、AbortController
+import { sessionToken, notifyExpired } from './auth.js';
+
 export async function streamChat(payload, handlers = {}, signal) {
+  const headers = { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' };
+  const token = sessionToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch('/api/chat/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+    headers,
     body: JSON.stringify(payload),
     signal,
+    credentials: 'same-origin',
   });
 
   if (!res.ok) {
+    if (res.status === 401) notifyExpired();
     let message = `HTTP ${res.status}`;
     try {
       const data = await res.json();

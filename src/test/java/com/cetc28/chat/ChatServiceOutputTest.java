@@ -56,6 +56,10 @@ class ChatServiceOutputTest {
     @Mock
     private com.cetc28.rag.KnowledgeRetriever knowledgeRetriever;
     @Mock
+    private com.cetc28.identity.KnowledgeScopeService knowledgeScopeService;
+    @Mock
+    private com.cetc28.identity.UserProfileService userProfileService;
+    @Mock
     private com.cetc28.rag.RagContextBuilder ragContextBuilder;
     @Mock
     private com.cetc28.modelconfig.ModelRuntime modelRuntime;
@@ -68,7 +72,8 @@ class ChatServiceOutputTest {
     void setUp() {
         service = new ChatService(agentRegistry, store, runRegistry, publisher, coordinationService,
                 memoryService, fileService, fileContextBuilder, generatedFileService, outputRegistry,
-                knowledgeRetriever, ragContextBuilder, new com.cetc28.rag.RagProperties(), modelRuntime, scheduler);
+                knowledgeRetriever, knowledgeScopeService, userProfileService,
+                ragContextBuilder, new com.cetc28.rag.RagProperties(), modelRuntime, scheduler);
         ReflectionTestUtils.setField(service, "exportFallbackEnabled", true);
     }
 

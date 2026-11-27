@@ -523,3 +523,71 @@ body.console-open { overflow: hidden; }
 .kb-domain-filter { font-size: 12px; padding: 2px 6px; max-width: 120px; }
 .kb-doc-meta .kb-chip { margin-right: 6px; }
 .cs-sub { color: var(--text-3); font-size: 12px; font-weight: 400; }
+
+/* ---- 用户与角色 ---- */
+.cs-user-name { font-size: 13px; color: var(--text); }
+.cs-user-sub { margin-top: 2px; font-size: 11px; color: var(--text-3); overflow-wrap: anywhere; }
+.cs-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.cs-tag {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-size: 11px;
+}
+.cs-domain-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.cs-domain {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 12px; color: var(--text-2); background: var(--bg-soft);
+}
+.cs-domain small { color: var(--text-3); font-size: 10.5px; }
+.cs-domain .btn-sm { padding: 0 5px; }
+
+.cs-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-2); }
+.cs-field > span { color: var(--text-3); font-size: 11.5px; }
+.cs-field input, .cs-field select, .cs-field textarea {
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font-size: 12.5px; font-family: inherit;
+}
+.cs-field input:focus, .cs-field select:focus, .cs-field textarea:focus {
+  outline: none; border-color: var(--accent);
+}
+.cs-field small { color: var(--text-3); font-size: 10.5px; }
+.cs-field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.cs-check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px; }
+.cs-check {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 9px; border: 1px solid var(--border); border-radius: 8px;
+  font-size: 12px; color: var(--text-2); cursor: pointer;
+}
+.cs-check:hover { border-color: var(--border-strong); }
+.cs-check input { accent-color: var(--accent); }
+.cs-check small { color: var(--text-3); font-size: 10.5px; }
+.cs-modal-section { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; }
+.cs-modal-section > span { font-size: 11.5px; color: var(--text-3); }
+
+.cs-modal-mask {
+  position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(2px);
+}
+.cs-modal {
+  width: min(680px, 100%); max-height: 86vh; display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+.cs-modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+}
+.cs-modal-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.cs-modal-close {
+  border: none; background: none; color: var(--text-3); font-size: 20px; line-height: 1; cursor: pointer;
+}
+.cs-modal-close:hover { color: var(--text); }
+.cs-modal-body { padding: 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.cs-modal-error {
+  margin: 0 18px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(239, 68, 68, 0.12); color: var(--danger); font-size: 12px;
+}
+.cs-modal-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 18px; border-top: 1px solid var(--border);
+}

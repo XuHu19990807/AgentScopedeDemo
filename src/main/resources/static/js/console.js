@@ -4,6 +4,8 @@ import { escapeHtml, renderMarkdown, enhance } from './markdown.js';
 
 const SECTIONS = {
   overview: { title: '概览', subtitle: '智能体、知识库与运行时状态' },
+  profile: { title: '我的画像', subtitle: '长期偏好、关注主题与记忆' },
+  users: { title: '用户与角色', subtitle: '账号、角色与知识库权限' },
   knowledge: { title: '知识库', subtitle: '文档管理、分段编辑与检索测试' },
   models: { title: '模型', subtitle: '语言模型、Embedding 配置与流量监控' },
   mcp: { title: 'MCP', subtitle: 'MCP Server 连接与工具状态' },
@@ -86,6 +88,14 @@ async function renderSection(section, force = false) {
   body.innerHTML = '<div class="cs-loading">加载中…</div>';
   try {
     if (section === 'overview') await renderOverview(body);
+    if (section === 'profile') {
+      const module = await import('./identity.js');
+      await module.renderProfile(body);
+    }
+    if (section === 'users') {
+      const module = await import('./identity.js');
+      await module.renderUsers(body);
+    }
     if (section === 'knowledge') {
       const module = await import('./kb.js');
       await module.renderKnowledgeWorkbench(body);
@@ -175,6 +185,8 @@ async function renderOverview(body) {
   const online = health && health.status === 'up' && health.redis === 'up';
   const components = health ? [
     ['Redis', health.redis],
+    ['DM 数据库', health.dm],
+    ['用户体系', health.identity],
     ['知识库检索', health.redisSearch],
     ['向量库', `${health.vectorStore || 'milvus'} · ${health.milvus || 'unknown'}`],
     ['模型', health.model],
@@ -240,6 +252,7 @@ async function renderOverview(body) {
           <span class="cs-sub">${stats ? `集合 ${escapeHtml(stats.indexFields ? 'Milvus 双集合' : '')}` : ''}</span>
         </div>
         <div class="cs-inline">
+          <button class="btn" data-go="users">用户与角色</button>
           <button class="btn" data-go="knowledge">上传与管理文档</button>
           <button class="btn" data-go="mcp">检查 MCP 连接</button>
           <button class="btn" data-go="skills">查看技能</button>

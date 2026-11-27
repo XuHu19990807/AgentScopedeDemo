@@ -49,6 +49,9 @@
         <!-- Nacos（3.3.0 起提供官方 AI 资源 SDK：Skill/Prompt/MCP） -->
         <nacos-client.version>3.3.0</nacos-client.version>
 
+        <!-- 达梦 JDBC（本地仓库 com.dameng:DmJdbcDriver18，见 docs/user-management.md） -->
+        <dm-jdbc.version>8.1.5.60</dm-jdbc.version>
+
         <!-- Maven plugins -->
         <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
@@ -94,6 +97,19 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
             <version>${spring-boot.version}</version>
+        </dependency>
+
+        <!-- ========== 达梦数据库（用户/角色/知识授权/画像/审计） ========== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+            <version>${spring-boot.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.dameng</groupId>
+            <artifactId>DmJdbcDriver18</artifactId>
+            <version>${dm-jdbc.version}</version>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- ========== Redis (Jedis) ========== -->

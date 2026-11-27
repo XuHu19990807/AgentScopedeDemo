@@ -265,6 +265,8 @@ async function renderEmbeddingTab(pane) {
         <button class="btn-sm" data-emb-edit="${escapeHtml(profile.id)}">编辑</button>
         <button class="btn-sm" data-emb-test="${escapeHtml(profile.id)}">测试</button>
         <button class="btn-sm primary" data-emb-apply="${escapeHtml(profile.id)}">应用</button>
+        <button class="btn-sm danger" data-emb-del="${escapeHtml(profile.id)}"
+          ${profile.id === config.defaultEmbeddingId ? 'disabled title="当前正在应用的配置不能删除，请先应用其它配置"' : ''}>删除</button>
       </td>
     </tr>`).join('');
 
@@ -341,6 +343,21 @@ function bindEmbeddingTab(pane) {
     }
   }));
   pane.querySelectorAll('[data-emb-apply]').forEach((button) => button.addEventListener('click', () => applyEmbedding(button, shell)));
+  pane.querySelectorAll('[data-emb-del]').forEach((button) => button.addEventListener('click', async () => {
+    const id = button.dataset.embDel;
+    if (!id) return;
+    if (!window.confirm(`确认删除 Embedding 配置 ${id}？删除后不可恢复，已生成的向量不受影响。`)) return;
+    button.disabled = true;
+    try {
+      await del(`/api/admin/models/embedding/${encodeURIComponent(id)}`);
+      if (state.editingEmbedding === id) state.editingEmbedding = null;
+      toast('Embedding 配置已删除', 'ok');
+      await reload(pane);
+    } catch (error) {
+      toast(error.message || '删除失败', 'error');
+      button.disabled = false;
+    }
+  }));
   const form = pane.querySelector('#mdlEmbForm');
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();

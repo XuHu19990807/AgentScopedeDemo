@@ -1,4 +1,6 @@
-// 统一 fetch 封装：JSON 请求、错误归一化
+// 统一 fetch 封装：JSON 请求、错误归一化、会话凭据与 401 失效通知
+import { sessionToken, notifyExpired } from './auth.js';
+
 export class ApiError extends Error {
   constructor(message, status) {
     super(message || '请求失败');
@@ -7,9 +9,15 @@ export class ApiError extends Error {
   }
 }
 
+function authHeaders(headers = {}) {
+  const token = sessionToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
+
 export async function request(path, options = {}) {
   const { method = 'GET', body, headers = {}, signal } = options;
-  const init = { method, headers: { ...headers }, signal };
+  const init = { method, headers: authHeaders({ ...headers }), signal, credentials: 'same-origin' };
   const adminToken = localStorage.getItem('agentchat.adminToken');
   if (adminToken) init.headers['X-Admin-Token'] = adminToken;
   if (body !== undefined) {
@@ -22,6 +30,9 @@ export async function request(path, options = {}) {
   } catch (e) {
     if (e.name === 'AbortError') throw e;
     throw new ApiError('网络异常，请检查服务是否启动', 0);
+  }
+  if (res.status === 401) {
+    notifyExpired();
   }
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
@@ -49,6 +60,8 @@ export function upload(path, formData, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', path);
+    const token = sessionToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     const adminToken = localStorage.getItem('agentchat.adminToken');
     if (adminToken) xhr.setRequestHeader('X-Admin-Token', adminToken);
     if (onProgress && xhr.upload) {
@@ -62,6 +75,7 @@ export function upload(path, formData, onProgress) {
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(data);
       } else {
+        if (xhr.status === 401) notifyExpired();
         reject(new ApiError((data && (data.message || data.error)) || `HTTP ${xhr.status}`, xhr.status));
       }
     };
@@ -76,10 +90,16 @@ export function upload(path, formData, onProgress) {
 export async function uploadFile(path, formData) {
   let res;
   try {
-    res = await fetch(path, { method: 'POST', body: formData });
+    res = await fetch(path, {
+      method: 'POST',
+      body: formData,
+      headers: authHeaders(),
+      credentials: 'same-origin',
+    });
   } catch (_) {
     throw new ApiError('网络异常，请检查服务是否启动', 0);
   }
+  if (res.status === 401) notifyExpired();
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {

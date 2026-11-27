@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -57,22 +58,29 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
 
     @Override
     public RetrievalResult retrieve(String query) {
-        return retrieve(query, Mode.HYBRID, -1, null, null);
+        return retrieveInDomains(query, Mode.HYBRID, -1, null, null);
     }
 
     @Override
     public RetrievalResult retrieve(String query, Mode mode) {
-        return retrieve(query, mode, -1, null, null);
+        return retrieveInDomains(query, mode, -1, null, null);
     }
 
     @Override
     public RetrievalResult retrieve(String query, Mode mode, int topK, Double minScore) {
-        return retrieve(query, mode, topK, minScore, null);
+        return retrieveInDomains(query, mode, topK, minScore, null);
     }
 
     @Override
     public RetrievalResult retrieve(String query, Mode mode, int topK, Double minScore, String domain) {
-        PipelineResult result = run(query, mode, topK, minScore, domain, false);
+        return retrieveInDomains(query, mode, topK, minScore,
+                domain == null || domain.isBlank() ? null : List.of(domain.trim()));
+    }
+
+    @Override
+    public RetrievalResult retrieveInDomains(String query, Mode mode, int topK, Double minScore,
+                                             Collection<String> domains) {
+        PipelineResult result = run(query, mode, topK, minScore, domains, false);
         if (result.emptyReason() != null) {
             return RetrievalResult.empty(query, result.emptyReason());
         }
@@ -96,7 +104,13 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
 
     @Override
     public Diagnosis diagnose(String query, Mode mode, Integer topK, String domain) {
-        PipelineResult result = run(query, mode, topK == null ? -1 : topK, null, domain, true);
+        return diagnoseInDomains(query, mode, topK,
+                domain == null || domain.isBlank() ? null : List.of(domain.trim()));
+    }
+
+    @Override
+    public Diagnosis diagnoseInDomains(String query, Mode mode, Integer topK, Collection<String> domains) {
+        PipelineResult result = run(query, mode, topK == null ? -1 : topK, null, domains, true);
         return new Diagnosis(query, result.mode().name(), result.domain(), result.tookMs(),
                 result.denseViews(), result.bm25Views(), result.fused(), result.reranked(),
                 result.selected(), result.degraded());
@@ -107,13 +121,18 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         return bm25Store.getById(chunkId);
     }
 
-    private PipelineResult run(String query, Mode mode, int topK, Double minScore, String domain, boolean diagnostics) {
+    private PipelineResult run(String query, Mode mode, int topK, Double minScore,
+                               Collection<String> domains, boolean diagnostics) {
         long started = System.currentTimeMillis();
         String normalized = RrfUtil.normalize(query);
         Mode effective = mode == null ? Mode.HYBRID : mode;
-        String domainKey = domain == null || domain.isBlank() ? null : domain.trim();
+        List<String> domainKeys = normalizeDomains(domains);
+        String domainLabel = domainKeys == null ? null : String.join(",", domainKeys);
         if (normalized.isBlank()) {
-            return PipelineResult.empty(query, effective, domainKey, "空查询", started);
+            return PipelineResult.empty(query, effective, domainLabel, "空查询", started);
+        }
+        if (domainKeys != null && domainKeys.isEmpty()) {
+            return PipelineResult.empty(query, effective, domainLabel, "当前用户没有可用知识域授权", started);
         }
         RagProperties.Retrieve cfg = props.getRetrieve();
         int limit = topK > 0 ? topK : Math.max(1, cfg.getTopK());
@@ -128,7 +147,7 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         Map<String, Double> denseScores = new LinkedHashMap<>();
         if (effective != Mode.BM25) {
             try {
-                for (MilvusRagStore.DenseHit hit : denseHits(normalized, denseLimit, domainKey,
+                for (MilvusRagStore.DenseHit hit : denseHits(normalized, denseLimit, domainKeys,
                         preSimilarity ? minSimilarity : null)) {
                     denseKeys.add(hit.chunkId());
                     denseScores.put(hit.chunkId(), hit.score());
@@ -142,7 +161,7 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         List<ChunkView> bm25Views = new ArrayList<>();
         if (effective != Mode.VECTOR) {
             try {
-                bm25Views = bm25Store.search(normalized, bm25Limit, MilvusBm25Store.domainFilter(domainKey));
+                bm25Views = bm25Store.search(normalized, bm25Limit, MilvusBm25Store.domainsFilter(domainKeys));
             } catch (Exception e) {
                 degraded.add("BM25 检索降级：" + e.getMessage());
                 log.warn("BM25 检索失败：{}", e.getMessage());
@@ -157,11 +176,11 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
 
         if (denseKeys.isEmpty() && bm25Keys.isEmpty()) {
             String reason = describeFailure(effective, degraded);
-            return PipelineResult.empty(query, effective, domainKey, reason, started);
+            return PipelineResult.empty(query, effective, domainLabel, reason, started);
         }
 
         // 低分时用改写查询补 BM25 召回（成本低、只增不减）
-        String bm25Filter = MilvusBm25Store.domainFilter(domainKey);
+        String bm25Filter = MilvusBm25Store.domainsFilter(domainKeys);
         if (effective == Mode.HYBRID && props.getQueryExpansion().isEnabled() && belowTrigger(denseScores, bm25Scores)) {
             for (String expanded : queryExpander.expand(normalized)) {
                 try {
@@ -182,7 +201,7 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         List<String> ordered = new ArrayList<>(new LinkedHashSet<>(RrfUtil.orderByScore(fused)));
         List<ChunkView> views = bm25Store.getByIds(ordered);
         if (views.isEmpty()) {
-            return PipelineResult.empty(query, effective, domainKey, "命中索引但元数据缺失（BM25 集合不可用？）", started);
+            return PipelineResult.empty(query, effective, domainLabel, "命中索引但元数据缺失（BM25 集合不可用？）", started);
         }
         Map<String, ChunkView> viewById = new LinkedHashMap<>();
         for (ChunkView view : views) viewById.put(view.chunkId(), view);
@@ -198,7 +217,7 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         // 域兜底过滤（BM25 用 expr、原生稠密用 payload expr；框架稠密路径只能事后过滤）
         List<ChunkView> floored = new ArrayList<>(fusedViews.size());
         for (ChunkView view : fusedViews) {
-            if (domainKey != null && !domainKey.equals(view.effectiveDomain())) continue;
+            if (domainKeys != null && !domainKeys.contains(view.effectiveDomain())) continue;
             if (floor > 0 && view.score() < floor) continue;
             floored.add(view);
         }
@@ -228,19 +247,36 @@ public class MilvusHybridRetriever implements KnowledgeRetriever {
         List<ChunkView> selected = selector.select(afterSimilarity, limit, props);
 
         List<ChunkView> denseViews = diagnostics ? denseViews(denseKeys, denseScores) : List.of();
-        return new PipelineResult(query, effective, domainKey, denseViews, bm25Views, fusedViews,
+        return new PipelineResult(query, effective, domainLabel, denseViews, bm25Views, fusedViews,
                 reranked, selected, degraded, System.currentTimeMillis() - started,
                 denseScores, bm25Scores, null);
     }
 
-    private List<MilvusRagStore.DenseHit> denseHits(String query, int limit, String domain, Double threshold) {
+    /**
+     * 域集合归一：null 表示不限（管理员/内部的兼容调用）；否则去空、去重。
+     * 返回空列表表示明确"无任何可用知识域"，调用方应直接返回空结果。
+     */
+    private static List<String> normalizeDomains(Collection<String> domains) {
+        if (domains == null) return null;
+        List<String> keys = new ArrayList<>();
+        for (String domain : domains) {
+            if (domain == null) continue;
+            String value = domain.trim();
+            if (!value.isEmpty() && !keys.contains(value)) keys.add(value);
+        }
+        return keys;
+    }
+
+    private List<MilvusRagStore.DenseHit> denseHits(String query, int limit, List<String> domains,
+                                                   Double threshold) {
         String denseMode = props.getMilvus().getDenseMode();
         boolean nativeAllowed = denseMode != null && !"framework".equalsIgnoreCase(denseMode)
                 && denseStore.nativeAvailable();
         if (nativeAllowed) {
             try {
-                String filter = domain == null ? null
-                        : "payload[\"" + MilvusRagStore.PAYLOAD_DOMAIN + "\"] == " + MilvusBm25Store.quote(domain);
+                String filter = MilvusBm25Store.domainsFilter(domains) == null ? null
+                        : "payload[\"" + MilvusRagStore.PAYLOAD_DOMAIN + "\"] in "
+                        + MilvusBm25Store.domainList(domains);
                 return denseStore.searchNative(query, limit, filter,
                         props.getMilvus().getIndex().getEfSearch());
             } catch (Exception e) {

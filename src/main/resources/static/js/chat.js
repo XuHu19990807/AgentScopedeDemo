@@ -2,6 +2,7 @@ import { get, post, del, uploadFile } from './api.js';
 import { streamChat } from './sse.js';
 import { renderMarkdown, enhance, escapeHtml } from './markdown.js';
 import { emit, on } from './bus.js';
+import { getItem, setItem } from './ui-store.js';
 import {
   applyMapCommand,
   clearMap,
@@ -69,12 +70,12 @@ export function initChat() {
   });
 
   const parallelCheck = $('parallelCheck');
-  state.parallel = localStorage.getItem(PARALLEL_KEY) === '1';
+  state.parallel = getItem(PARALLEL_KEY, '0') === '1';
   if (parallelCheck) {
     parallelCheck.checked = state.parallel;
     parallelCheck.addEventListener('change', () => {
       state.parallel = parallelCheck.checked;
-      localStorage.setItem(PARALLEL_KEY, state.parallel ? '1' : '0');
+      setItem(PARALLEL_KEY, state.parallel ? '1' : '0');
     });
   }
   syncParallelToggle();
@@ -116,7 +117,7 @@ async function initModelPicker() {
       picker.hidden = true;
       return;
     }
-    const stored = localStorage.getItem(MODEL_KEY);
+    const stored = getItem(MODEL_KEY);
     const wanted = state.modelId
       || (stored && models.some((model) => model.id === stored) ? stored : null)
       || data.defaultId
@@ -126,7 +127,7 @@ async function initModelPicker() {
     picker.hidden = false;
     picker.addEventListener('change', () => {
       state.modelId = picker.value || null;
-      if (state.modelId) localStorage.setItem(MODEL_KEY, state.modelId);
+      if (state.modelId) setItem(MODEL_KEY, state.modelId);
     });
   } catch (_) {
     picker.hidden = true;

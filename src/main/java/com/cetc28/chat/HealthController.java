@@ -3,11 +3,15 @@ package com.cetc28.chat;
 import com.cetc28.agentchat.base.AgentRegistry;
 import com.cetc28.config.NacosAvailabilityGate;
 import com.cetc28.config.NacosConfig;
+import com.cetc28.identity.AuthService;
+import com.cetc28.identity.DmSchemaInitializer;
+import com.cetc28.identity.IdentityProperties;
 import com.cetc28.mcp.McpHubService;
 import com.cetc28.rag.milvus.MilvusClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,6 +40,10 @@ public class HealthController {
     private final Environment environment;
     private final MilvusClientProvider milvus;
     private final com.cetc28.modelconfig.ModelRuntime modelRuntime;
+    private final JdbcTemplate jdbcTemplate;
+    private final DmSchemaInitializer schemaInitializer;
+    private final IdentityProperties identityProperties;
+    private final AuthService authService;
 
     public HealthController(UnifiedJedis jedis,
                             NacosConfig nacosConfig,
@@ -44,7 +52,11 @@ public class HealthController {
                             AgentRegistry agentRegistry,
                             Environment environment,
                             MilvusClientProvider milvus,
-                            com.cetc28.modelconfig.ModelRuntime modelRuntime) {
+                            com.cetc28.modelconfig.ModelRuntime modelRuntime,
+                            JdbcTemplate jdbcTemplate,
+                            DmSchemaInitializer schemaInitializer,
+                            IdentityProperties identityProperties,
+                            AuthService authService) {
         this.jedis = jedis;
         this.nacosConfig = nacosConfig;
         this.nacosGate = nacosGate;
@@ -53,6 +65,10 @@ public class HealthController {
         this.environment = environment;
         this.milvus = milvus;
         this.modelRuntime = modelRuntime;
+        this.jdbcTemplate = jdbcTemplate;
+        this.schemaInitializer = schemaInitializer;
+        this.identityProperties = identityProperties;
+        this.authService = authService;
     }
 
     @GetMapping("/health")
@@ -74,7 +90,30 @@ public class HealthController {
         result.put("nacos", nacosConfig.isEnabled() ? nacosGate.describe() : "disabled");
         result.put("mcpServers", mcpHubService.getServerInfoList().size());
         result.put("agents", agentRegistry.getEnabledAgentCount());
+        result.put("dm", pingDm() ? "up" : "down");
+        result.put("identity", identityStatus());
         return result;
+    }
+
+    private String identityStatus() {
+        boolean schemaReady = schemaInitializer.schemaReady();
+        if (!schemaReady) {
+            String error = schemaInitializer.lastError();
+            return error == null || error.isBlank() ? "schema_pending" : "schema_error: " + error;
+        }
+        return "ready"
+                + "（local" + (authService.ssoEnabled() ? ",sso" : "")
+                + (identityProperties.getAuth().getAnonymous().isEnabled() ? ",anonymous" : "") + "）";
+    }
+
+    private boolean pingDm() {
+        try {
+            Integer value = jdbcTemplate.queryForObject("SELECT 1 FROM DUAL", Integer.class);
+            return value != null && value == 1;
+        } catch (Exception e) {
+            log.debug("DM ping failed: {}", e.getMessage());
+            return false;
+        }
     }
 
     private boolean pingRedis() {

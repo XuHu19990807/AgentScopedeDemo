@@ -13,6 +13,23 @@ spring:
       max-file-size: 50MB
       max-request-size: 50MB
 
+  # ========== 达梦数据库（用户/角色/知识授权/画像/审计） ==========
+  # 表由 DmSchemaInitializer 启动时按 db/dm-schema.sql 幂等创建（已存在则跳过），
+  # 因此关闭 Spring 自带的 schema.sql 初始化，避免重复执行与方言差异。
+  datasource:
+    url: jdbc:dm://${DB_HOST:127.0.0.1}:${DB_PORT:5236}?schema=${DB_SCHEMA:DBTXZNT}
+    username: ${DB_USER:DBTXZNT}
+    password: ${DB_PASSWORD:SYSDBAsysdba23}
+    driver-class-name: dm.jdbc.driver.DmDriver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX:10}
+      minimum-idle: ${DB_POOL_MIN:2}
+      connection-timeout: 5000
+      pool-name: dm-pool
+  sql:
+    init:
+      mode: never
+
   # ========== Redis 配置（Jedis 与 Spring 共用这一份） ==========
   data:
     redis:
@@ -79,6 +96,47 @@ app:
     images-dir: ${PLOT_IMAGES_DIR:./plot-images}
   # 管理接口令牌；为空时仅允许本机访问管理接口
   admin-token: ${ADMIN_TOKEN:}
+  # ========== 用户身份 / 单点登录 ==========
+  auth:
+    # 登录会话（Redis）有效期，滑动续期
+    session-ttl-seconds: ${AUTH_SESSION_TTL:28800}
+    cookie-name: ${AUTH_COOKIE_NAME:dsh_sid}
+    # 未登录是否允许匿名使用（兼容旧行为）；生产建议 false
+    anonymous:
+      enabled: ${AUTH_ANONYMOUS:true}
+    # 内置管理员账号（首次启动写入 DM；生产必须通过环境变量覆盖密码）
+    bootstrap-admin:
+      username: ${AUTH_ADMIN_USERNAME:admin}
+      password: ${AUTH_ADMIN_PASSWORD:admin123}
+    # 登录失败锁定：窗口内失败次数达到阈值返回 429
+    login-max-failures: ${AUTH_LOGIN_MAX_FAILURES:8}
+    login-fail-window-seconds: ${AUTH_LOGIN_FAIL_WINDOW:300}
+    # 大系统单点登录：共享密钥签名令牌（URL ?sso= / postMessage / X-SSO-Token 请求头）
+    sso:
+      shared-secret: ${SSO_SHARED_SECRET:}
+      # 令牌允许的时间偏差（秒）
+      tolerance-seconds: ${SSO_TOLERANCE_SECONDS:300}
+      # 反向代理受信头模式：网关已登录时直接透传用户身份，必须配置 trusted-proxies
+      trusted-header:
+        enabled: ${SSO_TRUSTED_HEADER:false}
+        user-header: ${SSO_USER_HEADER:X-Auth-User}
+        name-header: ${SSO_NAME_HEADER:X-Auth-Name}
+        roles-header: ${SSO_ROLES_HEADER:X-Auth-Roles}
+        domains-header: ${SSO_DOMAINS_HEADER:X-Auth-Domains}
+        trusted-proxies: ${SSO_TRUSTED_PROXIES:}
+    # 建表与种子数据（幂等；失败只告警不阻断启动）
+    schema-init:
+      enabled: ${AUTH_SCHEMA_INIT:true}
+  # ========== 知识库权限 ==========
+  knowledge:
+    # 用户/角色都没有授权时默认可见的知识域（逗号分隔）
+    default-read-domains: ${KNOWLEDGE_DEFAULT_DOMAINS:default}
+    # true=未授权用户看不到任何知识；false=回落到 default-read-domains
+    deny-all-when-unassigned: ${KNOWLEDGE_DENY_ALL:false}
+  # ========== 嵌入大系统 ==========
+  embed:
+    # 允许把本系统嵌入的父页面来源（逗号分隔，留空=不限制/不加 CSP 头）
+    allowed-origins: ${EMBED_ALLOWED_ORIGINS:}
   memory:
     store-preference: true
     # 是否用廉价模型异步抽取结构化用户画像（Redis），与 MEMORY.md 并存

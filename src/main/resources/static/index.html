@@ -53,6 +53,20 @@
         </svg>
       </button>
       <div class="health-badge" id="healthBadge" title="组件状态">在线</div>
+      <div class="user-chip" id="userChip">
+        <button class="user-btn" id="userMenuBtn" type="button" title="当前用户">
+          <span class="user-avatar" id="userAvatar">U</span>
+          <span class="user-name" id="userName">未登录</span>
+        </button>
+        <div class="user-menu" id="userMenu" hidden>
+          <div class="user-meta" id="userMeta"></div>
+          <button type="button" data-action="profile">我的画像</button>
+          <button type="button" data-action="memory">我的记忆</button>
+          <button type="button" data-action="admin">管理控制台</button>
+          <button type="button" data-action="login">登录 / 切换账号</button>
+          <button type="button" data-action="logout" class="danger">退出登录</button>
+        </div>
+      </div>
     </header>
 
     <section class="messages" id="messages"></section>
@@ -90,6 +104,8 @@
     </div>
     <nav class="console-links" id="consoleNav">
       <button type="button" data-section="overview"><span class="console-ico">◈</span>概览</button>
+      <button type="button" data-section="profile"><span class="console-ico">☺</span>我的画像</button>
+      <button type="button" data-section="users"><span class="console-ico">☾</span>用户与角色</button>
       <button type="button" data-section="knowledge"><span class="console-ico">▤</span>知识库</button>
       <button type="button" data-section="models"><span class="console-ico">◌</span>模型</button>
       <button type="button" data-section="mcp"><span class="console-ico">⇄</span>MCP</button>

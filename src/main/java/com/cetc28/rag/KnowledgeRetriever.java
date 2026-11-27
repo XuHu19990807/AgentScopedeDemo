@@ -1,5 +1,6 @@
 package com.cetc28.rag;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -28,6 +29,15 @@ public interface KnowledgeRetriever {
         return retrieve(query, mode, topK, minScore);
     }
 
+    /**
+     * 多域授权检索：{@code domains == null} 表示不限（管理员/全库）；空集合表示没有可用知识域，
+     * 应直接返回空结果；非空集合表示只在这些域内检索。默认实现退化为全库检索，避免旧实现报错。
+     */
+    default RetrievalResult retrieveInDomains(String query, Mode mode, int topK, Double minScore,
+                                              Collection<String> domains) {
+        return retrieve(query, mode, topK, minScore);
+    }
+
     /** 按 chunkId 回读一个块（回答校验/引用回读使用） */
     ChunkView readChunk(String chunkId);
 
@@ -37,6 +47,11 @@ public interface KnowledgeRetriever {
      */
     default Diagnosis diagnose(String query, Mode mode, Integer topK, String domain) {
         throw new UnsupportedOperationException("当前检索实现不支持诊断");
+    }
+
+    /** 多域诊断：语义同 {@link #retrieveInDomains}。 */
+    default Diagnosis diagnoseInDomains(String query, Mode mode, Integer topK, Collection<String> domains) {
+        return diagnose(query, mode, topK, null);
     }
 
     /** 各阶段候选（均已按该阶段分数降序）。 */

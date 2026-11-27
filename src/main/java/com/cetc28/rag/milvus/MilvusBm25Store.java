@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -377,6 +378,29 @@ public class MilvusBm25Store {
     public static String domainFilter(String domain) {
         if (domain == null || domain.isBlank()) return null;
         return F_DOMAIN + " == " + quote(domain.trim());
+    }
+
+    /**
+     * 多域过滤表达式：{@code null} 表示不限；空集合表示无可用域（构造一个必然不命中的条件，
+     * 由检索层提前短路返回空结果，这里只是防御）；非空集合生成 {@code domain in [...]}。
+     */
+    public static String domainsFilter(Collection<String> domains) {
+        if (domains == null) return null;
+        if (domains.isEmpty()) return F_DOMAIN + " == \"__no_domain_granted__\"";
+        return F_DOMAIN + " in " + domainList(domains);
+    }
+
+    /** 生成 {@code ["a","b"]} 形式的域列表字面量，供 payload expr 复用。 */
+    public static String domainList(Collection<String> domains) {
+        StringBuilder builder = new StringBuilder("[");
+        boolean first = true;
+        for (String domain : domains) {
+            if (domain == null || domain.isBlank()) continue;
+            if (!first) builder.append(',');
+            builder.append(quote(domain.trim()));
+            first = false;
+        }
+        return builder.append(']').toString();
     }
 
     private static String str(Object value) {

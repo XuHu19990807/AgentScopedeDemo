@@ -1,4 +1,5 @@
 import { on, emit } from './bus.js';
+import { userId } from './auth.js';
 
 /**
  * 问答页与独立数字地球窗口之间的 BroadcastChannel 桥。
@@ -10,11 +11,19 @@ import { on, emit } from './bus.js';
  */
 
 const CHANNEL_NAME = 'agentchat-earth-v1';
-const CHAT_ID_KEY = 'agentchat.earthChatId';
-const WINDOW_NAME = 'agentchat-earth';
+const CHAT_ID_KEY_PREFIX = 'agentchat.earthChatId:';
 const EARTH_URL = '/earth/index.html';
 // 地球静态资源更新后改这个值：已打开的地球窗口会在下次点击时自动重载到新构建。
 const EARTH_BUILD = 'plot-v1a';
+
+/** 地球会话按用户隔离：同一浏览器切换账号不会复用上一个用户的地球会话。 */
+function chatIdKey() {
+  return CHAT_ID_KEY_PREFIX + userId();
+}
+
+function earthWindowName() {
+  return 'agentchat-earth-' + userId();
+}
 
 let channel = null;
 let chatId = null;
@@ -39,10 +48,10 @@ function randomId() {
 function ensureChatId() {
   if (chatId) return chatId;
   try {
-    chatId = sessionStorage.getItem(CHAT_ID_KEY);
+    chatId = sessionStorage.getItem(chatIdKey());
     if (!chatId) {
       chatId = 'c_' + randomId();
-      sessionStorage.setItem(CHAT_ID_KEY, chatId);
+      sessionStorage.setItem(chatIdKey(), chatId);
     }
   } catch (_) {
     chatId = 'c_' + randomId();
@@ -187,7 +196,7 @@ export function openEarthWindow() {
     // 直接 window.open(url, name) 在部分 Chromium 上会只聚焦旧窗口、不加载新 URL。
     opened = window.open(
       '',
-      WINDOW_NAME,
+      earthWindowName(),
       'popup=yes,width=1000,height=1000,left=0,top=0,resizable=yes,scrollbars=no',
     );
   } catch (error) {
@@ -294,4 +303,33 @@ export function setMapConversation(id) {
 
 export function onMapSelect(handler) {
   selectHandler = typeof handler === 'function' ? handler : null;
+}
+
+/**
+ * 切换/退出用户时重置地球会话：清空指令、关闭旧窗口、丢弃旧 chatId。
+ * 新用户下次点击"数字地球"会拿到全新的 chatId，历史标注不会串到另一个账号。
+ */
+export function resetEarthSession() {
+  try {
+    send('clear');
+  } catch (_) {
+    /* ignore */
+  }
+  lastCommands = [];
+  conversationId = null;
+  currentTitle = '数字地球';
+  currentCount = 0;
+  chatId = null;
+  try {
+    sessionStorage.removeItem(chatIdKey());
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    earthWindow?.close();
+  } catch (_) {
+    /* ignore */
+  }
+  earthWindow = null;
+  updateButton();
 }

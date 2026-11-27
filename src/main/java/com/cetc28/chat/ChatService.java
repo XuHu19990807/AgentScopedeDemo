@@ -4,6 +4,8 @@ import com.cetc28.agentchat.base.AgentBase;
 import com.cetc28.agentchat.base.AgentRegistry;
 import com.cetc28.dto.StreamEvent;
 import com.cetc28.export.ExportFormat;
+import com.cetc28.identity.KnowledgeScopeService;
+import com.cetc28.identity.UserProfileService;
 import com.cetc28.memory.UserMemoryService;
 import com.cetc28.modelconfig.ChatProfile;
 import com.cetc28.modelconfig.ModelRuntime;
@@ -31,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -58,6 +61,8 @@ public class ChatService {
     private final ChatOutputRegistry outputRegistry;
     private final ScheduledExecutorService heartbeatScheduler;
     private final KnowledgeRetriever knowledgeRetriever;
+    private final KnowledgeScopeService knowledgeScopeService;
+    private final UserProfileService userProfileService;
     private final RagContextBuilder ragContextBuilder;
     private final RagProperties ragProperties;
     private final ModelRuntime modelRuntime;
@@ -100,6 +105,8 @@ public class ChatService {
                        GeneratedFileService generatedFileService,
                        ChatOutputRegistry outputRegistry,
                        KnowledgeRetriever knowledgeRetriever,
+                       KnowledgeScopeService knowledgeScopeService,
+                       UserProfileService userProfileService,
                        RagContextBuilder ragContextBuilder,
                        RagProperties ragProperties,
                        ModelRuntime modelRuntime,
@@ -115,6 +122,8 @@ public class ChatService {
         this.generatedFileService = generatedFileService;
         this.outputRegistry = outputRegistry;
         this.knowledgeRetriever = knowledgeRetriever;
+        this.knowledgeScopeService = knowledgeScopeService;
+        this.userProfileService = userProfileService;
         this.ragContextBuilder = ragContextBuilder;
         this.ragProperties = ragProperties;
         this.modelRuntime = modelRuntime;
@@ -184,9 +193,9 @@ public class ChatService {
                     .modelId(selection.profileId())
                     .build();
             store.appendMessage(conversation.getId(), userMessage);
-            // 先读取本轮之前的长期记忆，再写入本轮内容：避免用户刚说的话立刻被当成
+            // 先读取本轮之前的长期画像/记忆，再写入本轮内容：避免用户刚说的话立刻被当成
             // “历史记忆”重复注入，也避免问句被误存为偏好。
-            String memoryContext = memoryService.recallContext(userId, content, 5);
+            String memoryContext = userProfileService.buildContext(userId, content);
             memoryService.rememberIfRequested(userId, content);
             if (conversation.getTitle() == null || conversation.getTitle().isBlank()) {
                 String titleSource = typedContent.isEmpty() && !attachments.isEmpty()
@@ -215,7 +224,7 @@ public class ChatService {
                 log.info("文件上下文注入: files={}, contextChars={}", files.size(), fileContext.length());
             }
             // 知识库检索在 meta 之前完成：失败/为空都不影响对话，只是不带引用
-            KnowledgeContext knowledge = retrieveKnowledge(content, files, run);
+            KnowledgeContext knowledge = retrieveKnowledge(content, files, run, userId);
 
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("conversationId", conversation.getId());
@@ -309,7 +318,15 @@ public class ChatService {
                     : fileContext + "\n\n[用户问题]\n" + content;
             // 参考材料统一注入 RuntimeContext：orchestrator 与 worker 共享同一份证据，
             // 由 dispatch_agents 工具负责转发，避免子智能体各自重复检索。
-            String context = knowledge == null ? null : knowledge.injected().promptBlock();
+            StringBuilder orchestrationContext = new StringBuilder();
+            if (memoryContext != null && !memoryContext.isBlank()) {
+                orchestrationContext.append("[用户偏好与画像]\n").append(memoryContext);
+            }
+            if (knowledge != null && !knowledge.injected().isEmpty()) {
+                if (orchestrationContext.length() > 0) orchestrationContext.append("\n\n");
+                orchestrationContext.append(knowledge.injected().promptBlock());
+            }
+            String context = orchestrationContext.length() == 0 ? null : orchestrationContext.toString();
             return coordinationService.stream(merged, userId, conversationId, context, modelProfileId);
         }
         String agentId = mode == ChatMode.DEEP ? "deep" : "chat";
@@ -319,7 +336,7 @@ public class ChatService {
         }
         StringBuilder context = new StringBuilder();
         if (memoryContext != null && !memoryContext.isBlank()) {
-            context.append("[用户长期记忆]\n").append(memoryContext);
+            context.append("[用户偏好与画像]\n").append(memoryContext);
         }
         if (knowledge != null && !knowledge.injected().isEmpty()) {
             if (context.length() > 0) context.append("\n\n");
@@ -344,7 +361,7 @@ public class ChatService {
      * 不是对话的前置依赖。因此这里吞掉所有异常并降级为空上下文。
      */
     private KnowledgeContext retrieveKnowledge(String content, List<ChatFileService.LoadedFile> files,
-                                              RunContext run) {
+                                              RunContext run, String userId) {
         if (!ragProperties.isEnabled() || !ragProperties.getInject().isEnabled()) {
             return new KnowledgeContext(RetrievalResult.empty(content, "RAG 已关闭"),
                     RagContextBuilder.InjectedContext.none(null));
@@ -354,8 +371,16 @@ public class ChatService {
             return new KnowledgeContext(RetrievalResult.empty(content, null),
                     RagContextBuilder.InjectedContext.none(null));
         }
+        // 角色/用户授权决定可见知识域：null=不限（管理员），空集合=无授权（直接跳过）
+        Set<String> domains = knowledgeScopeService.filterDomains(userId);
+        if (domains != null && domains.isEmpty()) {
+            log.info("用户 {} 没有知识域授权，跳过知识库注入", userId);
+            return new KnowledgeContext(RetrievalResult.empty(content, "当前账号没有可用知识域授权"),
+                    RagContextBuilder.InjectedContext.none(null));
+        }
         try {
-            RetrievalResult result = knowledgeRetriever.retrieve(content);
+            RetrievalResult result = knowledgeRetriever.retrieveInDomains(
+                    content, KnowledgeRetriever.Mode.HYBRID, -1, null, domains);
             RagContextBuilder.InjectedContext injected = ragContextBuilder.build(result);
             if (!injected.isEmpty()) {
                 run.setCitations(injected.citations());
@@ -525,6 +550,16 @@ public class ChatService {
             store.appendMessage(run.getConversationId(), assistant);
         } catch (Exception e) {
             log.error("保存助手消息失败 conversation={}: {}", run.getConversationId(), e.getMessage());
+        }
+
+        // 画像沉淀：只统计正常完成的一轮，避免失败/取消污染偏好统计
+        if (ChatMessage.STATUS_COMPLETED.equals(status)) {
+            try {
+                userProfileService.recordTurn(run.getUserId(), run.getConversationId(),
+                        run.getMode().value(), run.getModelName(), run.getUserText());
+            } catch (Exception e) {
+                log.debug("记录用户画像失败（忽略）：{}", e.getMessage());
+            }
         }
 
         for (ChatAttachment output : assistant.getOutputs()) {

@@ -269,6 +269,33 @@ public class ModelAdminController {
         return ok("Embedding 配置已保存", store.current());
     }
 
+    /**
+     * 删除 Embedding 配置。
+     *
+     * <p>当前正在应用的配置不允许直接删除（避免向量维度与已有索引不一致），
+     * 需先在「应用」里切换其它配置；同时至少保留一个可用的配置。
+     */
+    @DeleteMapping("/embedding/{id}")
+    public Map<String, Object> deleteEmbedding(@PathVariable String id) {
+        ModelConfig config = store.current();
+        EmbeddingProfile target = config.findEmbedding(id)
+                .orElseThrow(() -> new IllegalArgumentException("Embedding 配置不存在：" + id));
+        if (id.equals(config.defaultEmbeddingId())) {
+            throw new IllegalStateException("当前正在应用的 Embedding 配置不能删除，请先应用其它配置");
+        }
+        long usableCount = config.embeddingProfiles().stream().filter(EmbeddingProfile::usable).count();
+        if (target.usable() && usableCount <= 1) {
+            throw new IllegalStateException("至少保留一个可用的 Embedding 配置");
+        }
+        store.update(current -> {
+            List<EmbeddingProfile> list = new ArrayList<>(current.embeddingProfiles());
+            list.removeIf(profile -> profile.id().equals(id));
+            return current.withEmbeddingProfiles(list, current.defaultEmbeddingId());
+        });
+        runtime.refreshFromStore();
+        return ok("Embedding 配置已删除", store.current());
+    }
+
     @PostMapping("/embedding/{id}/test")
     public Map<String, Object> testEmbedding(@PathVariable String id) {
         EmbeddingProfile profile = store.current().findEmbedding(id)

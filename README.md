@@ -80,6 +80,7 @@ src/main/java/com/cetc28/
 ### 4.1 身份与会话状态
 
 - 所有 Agent 调用显式传入 `(userId, sessionId)`，`sessionId` 使用 `conversationId`；`userId` 来自请求上下文，空值回退 `anonymous`。
+- `userId` 由登录态决定：本地登录 / 大系统 SSO 令牌 / 受信网关头 / 匿名 `dsh_uid`，详见 [docs/user-management.md](docs/user-management.md)。
 - 每个 Agent 在构建时通过 `AgentStateStoreFactory.create(agentId)` 获得独立 store，key 形如：
   `agentchat:v2:agentstate:{agentId}:{userId}:{sessionId}:agent_state`
 - 因此同一会话切换 `chat` / `deep` / `orchestrator` 不会互相覆盖历史；同一用户的不同会话也彼此隔离。
@@ -272,6 +273,7 @@ rag:
 | POST | `/api/admin/models/default` | 设置默认语言模型 / Embedding（`kind` + `id`） |
 | POST | `/api/admin/models/agent-map` | 按 Agent 绑定语言模型 |
 | POST | `/api/admin/models/embedding` | 新增或更新 Embedding 配置 |
+| DELETE | `/api/admin/models/embedding/{id}` | 删除配置（当前应用的配置需先切换，且至少保留一个可用配置） |
 | POST | `/api/admin/models/embedding/{id}/test` | 探测 Embedding 维度 |
 | POST | `/api/admin/models/embedding/apply` | 应用为默认 Embedding，`rebuild=true` 时重建索引 |
 | GET | `/api/admin/models/embedding/reindex` | 索引重建进度 |
@@ -380,10 +382,37 @@ chat:
 
 > 注意：Milvus BM25 中文检索依赖 JVM 默认字符集，因此 `pom.xml` 的 surefire 已固定 `-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8`；本地/容器启动应用时同样要带上这两个参数（`EncodingGuard` 会在启动时告警）。
 
+## 5. 用户体系：账号、SSO、角色与知识权限
+
+内嵌到大系统作为子页面时，`UserContextFilter` 按「会话 Cookie → Bearer → SSO 令牌 → 受信网关头 → 匿名」的顺序解析身份，
+登录后无需二次登录；`userId` 一旦变化，会话、记忆、AgentState、workspace 自动切换到该用户的数据。
+
+- **账号与角色**：达梦 `DBTXZNT` 的 `AUTH_USER/AUTH_ROLE/AUTH_USER_ROLE`，管理台「用户与角色」可视化增删改；
+  本地密码 PBKDF2 加盐存储，改密/停用/删除会立即吊销旧会话。
+- **大系统免登录**：HMAC-SHA256 签名令牌（`?sso=` / `X-SSO-Token` / iframe postMessage），
+  或由受信网关注入 `X-Auth-User` 等请求头；令牌格式与接入示例见文档。
+- **知识库按角色/用户授权**：`AUTH_KB_GRANT` 存「主体 → 知识域」，用户可见域 = 直接授权 ∪ 角色授权；
+  自动 RAG（`ChatService`）与 Agent 主动检索（`KnowledgeSearchTool`）都在 Milvus 过滤条件里带 `domain in [...]`，
+  越权域在上传、列表、检索、引用回读四处统一拦截。
+- **画像与记忆**：`USR_PROFILE` + Redis 记忆，按轮次沉淀常用模式/模型/关注主题，注入到对话上下文最前面；
+  「我的画像」页可查看并删除主题/记忆。
+- **界面隔离**：浏览器 localStorage 键按 `agentchat.u:<userId>:*` 分键，地球窗口名与 `chatId` 按用户生成，
+  退出登录时清空对话 DOM、附件与地球会话并广播 `clear`。
+
+存储分工：身份/角色/授权/画像/审计 → 达梦；会话令牌、登录失败计数、会话与记忆缓存 → Redis。
+
+完整设计、建表脚本、API、SSO 接入代码与验收清单见 [docs/user-management.md](docs/user-management.md)。
+本地联调可用 `scripts/gen-sso-token.ps1` 生成签名令牌。
+
 ## 6. 主要配置
 
 
 ```yaml
+spring:
+  datasource:
+    url: jdbc:dm://127.0.0.1:5236?schema=DBTXZNT
+    username: DBTXZNT
+    password: SYSDBAsysdba23
 app:
   state:
     prefix: "agentchat:v2:"        # 与 v1 数据隔离
@@ -391,6 +420,16 @@ app:
     timeout-seconds: 120
   memory:
     extract-enabled: true
+  auth:
+    anonymous:
+      enabled: true               # 接入大系统后建议 false
+    sso:
+      shared-secret: ""           # 生产用 SSO_SHARED_SECRET
+  knowledge:
+    default-read-domains: default
+    deny-all-when-unassigned: false
+  embed:
+    allowed-origins: ""           # 例：https://erp.example.com
 
 agent:
   harness:
